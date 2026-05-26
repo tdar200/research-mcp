@@ -1,0 +1,23 @@
+{
+  "name": "research-mcp",
+  "version": "0.1.0",
+  "description": "MCP server: DuckDuckGo search + Jina Reader extraction for Claude agents",
+  "type": "module",
+  "main": "src/server.js",
+  "bin": {
+    "research-mcp": "src/server.js"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test test/",
+    "test:integration": "RUN_INTEGRATION=1 node --test test/"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "cheerio": "^1.0.0",
+    "zod": "^3.23.8"
+  }
+}
