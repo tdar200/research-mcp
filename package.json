@@ -9,8 +9,8 @@
   },
   "scripts": {
     "start": "node src/server.js",
-    "test": "node --test test/",
-    "test:integration": "RUN_INTEGRATION=1 node --test test/"
+    "test": "node --test test/*.test.js",
+    "test:integration": "RUN_INTEGRATION=1 node --test test/*.test.js"
   },
   "engines": {
     "node": ">=20"
