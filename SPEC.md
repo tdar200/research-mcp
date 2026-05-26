@@ -8,6 +8,10 @@
 
 A zero-cost, zero-key MCP server that gives Claude Code agents fresh web research capability beyond the built-in `WebSearch` / `WebFetch`. Specifically, a single combined `search_and_read` tool that returns top-N search results *with their content already extracted to clean markdown* — so the agent does one tool call instead of N+1.
 
+## HTTP backend: curl, not Node fetch
+
+Both `search.js` and `fetch.js` shell out to `curl` (via `src/http.js`) instead of using Node's built-in `fetch` (undici). Empirically, on this machine, undici and `node:https` both time out at TCP-connect time on Cloudflare-fronted hosts (e.g. `r.jina.ai`, `example.com`) while curl reaches the very same IPs without issue. Rather than chase TLS fingerprinting or kernel TCP knobs, we shell out — curl is universally available, stable, and handles redirects/MTU/dual-stack better than any drop-in alternative we tried. Trade: ~50ms per call for process spawn, no big deal at agent-research volume. Tests inject `fetchImpl` so they remain offline-deterministic.
+
 ## Non-goals (deferred to Tier 2+)
 
 - Self-hosted search (SearXNG) — DuckDuckGo HTML scrape is enough for MVP.

@@ -1,4 +1,5 @@
 import { load } from 'cheerio';
+import { curlFetch } from './http.js';
 
 /**
  * Parse a DuckDuckGo HTML search results page into structured results.
@@ -50,27 +51,21 @@ export function parseDuckDuckGoHtml(html, numResults) {
  */
 export async function duckDuckGoSearch(query, numResults = 5) {
   const params = new URLSearchParams({ q: query });
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 15000);
 
-  try {
-    const res = await fetch('https://html.duckduckgo.com/html/', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
-      },
-      body: params.toString(),
-      signal: controller.signal,
-    });
+  const res = await curlFetch('https://html.duckduckgo.com/html/', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
+    },
+    body: params.toString(),
+    timeoutMs: 15000,
+  });
 
-    if (!res.ok) {
-      throw new Error(`DuckDuckGo returned ${res.status}: ${res.statusText}`);
-    }
-
-    const html = await res.text();
-    return parseDuckDuckGoHtml(html, numResults);
-  } finally {
-    clearTimeout(timeoutId);
+  if (!res.ok) {
+    throw new Error(`DuckDuckGo returned ${res.status}: ${res.statusText}`);
   }
+
+  const html = await res.text();
+  return parseDuckDuckGoHtml(html, numResults);
 }

@@ -1,3 +1,5 @@
+import { curlFetch } from './http.js';
+
 const JINA_BASE = 'https://r.jina.ai/';
 
 /**
@@ -12,17 +14,14 @@ const JINA_BASE = 'https://r.jina.ai/';
 export async function jinaFetch(url, opts = {}) {
   const {
     maxChars = 20000,
-    fetchImpl = fetch,
+    fetchImpl = curlFetch,
     timeoutMs = 15000,
   } = opts;
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     const res = await fetchImpl(`${JINA_BASE}${url}`, {
       headers: { 'Accept': 'text/markdown' },
-      signal: controller.signal,
+      timeoutMs,
     });
 
     if (!res.ok) {
@@ -45,10 +44,8 @@ export async function jinaFetch(url, opts = {}) {
       title: null,
       content: null,
       truncated: false,
-      error: err.name === 'AbortError' ? `timeout after ${timeoutMs}ms` : String(err.message || err),
+      error: String(err.message || err),
     };
-  } finally {
-    clearTimeout(timeoutId);
   }
 }
 

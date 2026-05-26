@@ -1,4 +1,10 @@
 #!/usr/bin/env node
+import dns from 'node:dns';
+// Prefer IPv4-first DNS resolution. Without this, Node's undici can hang for
+// 10s on AAAA records when IPv6 is broken in the local network path. curl
+// handles this transparently; Node does not. Affects both search and fetch.
+dns.setDefaultResultOrder('ipv4first');
+
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
