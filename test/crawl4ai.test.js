@@ -43,6 +43,39 @@ test('crawl4aiFetch posts URL to /crawl and returns normalized result', async ()
   assert.match(capturedBody, /https:\/\/example\.com/);
 });
 
+test('crawl4aiFetch handles markdown returned as dict {raw_markdown, fit_markdown}', async () => {
+  const fakeFetch = mock.fn(async () => ({
+    ok: true, status: 200, statusText: 'OK',
+    text: async () => JSON.stringify({
+      results: [{
+        url: 'https://example.com',
+        success: true,
+        markdown: {
+          raw_markdown: '# Raw markdown content',
+          fit_markdown: '# Fit (filtered) markdown content',
+          markdown_with_citations: '...',
+        },
+        metadata: { title: 'Example' },
+      }],
+    }),
+  }));
+  const result = await crawl4aiFetch('https://example.com', { fetchImpl: fakeFetch });
+  // Prefers fit_markdown when both present
+  assert.match(result.content, /Fit \(filtered\) markdown/);
+  assert.equal(result.title, 'Example');
+});
+
+test('crawl4aiFetch falls back to raw_markdown when fit_markdown empty', async () => {
+  const fakeFetch = mock.fn(async () => ({
+    ok: true, status: 200, statusText: 'OK',
+    text: async () => JSON.stringify({
+      results: [{ success: true, markdown: { raw_markdown: 'Just raw', fit_markdown: '' } }],
+    }),
+  }));
+  const result = await crawl4aiFetch('https://example.com', { fetchImpl: fakeFetch });
+  assert.equal(result.content, 'Just raw');
+});
+
 test('crawl4aiFetch truncates content beyond max_chars', async () => {
   const longMd = 'x'.repeat(5000);
   const fakeFetch = mock.fn(async () => ({

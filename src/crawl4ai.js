@@ -66,7 +66,12 @@ export async function crawl4aiFetch(url, opts = {}) {
       return { url, title: null, content: null, truncated: false, error: `crawl4ai: ${first.error_message || 'unknown failure'}` };
     }
 
-    const md = first.markdown || '';
+    // Crawl4AI returns markdown as either a string OR a dict {raw_markdown, fit_markdown, ...}.
+    // Prefer fit_markdown (BM25-filtered "clean" version), fall back to raw_markdown, then string form.
+    const mdField = first.markdown;
+    const md = typeof mdField === 'string'
+      ? mdField
+      : (mdField?.fit_markdown || mdField?.raw_markdown || '');
     const truncated = md.length > maxChars;
     return {
       url,
