@@ -31,9 +31,14 @@ const DISABLE_EXTRACTORS = process.env.DISABLE_EXTRACTORS === '1';
 
 const cache = new Cache({ dbPath: DB_PATH });
 
+const SourceEnum = z.enum(['web', 'news', 'reddit', 'hackernews']).optional().default('web');
+const TimeRangeEnum = z.enum(['all', 'day', 'week', 'month', 'year']).optional().default('all');
+
 const WebSearchArgs = z.object({
   query: z.string().min(1),
   num_results: z.number().int().min(1).max(20).optional().default(5),
+  source: SourceEnum,
+  time_range: TimeRangeEnum,
 });
 
 const FetchUrlArgs = z.object({
@@ -45,6 +50,8 @@ const SearchAndReadArgs = z.object({
   query: z.string().min(1),
   num_results: z.number().int().min(1).max(10).optional().default(3),
   max_chars_per_result: z.number().int().min(100).max(50000).optional().default(8000),
+  source: SourceEnum,
+  time_range: TimeRangeEnum,
 });
 
 const ListResearchArgs = z.object({
@@ -60,13 +67,26 @@ const TOOLS = [
   {
     name: 'web_search',
     description:
-      'Search the web via DuckDuckGo. Returns a list of {title, url, snippet} results. ' +
-      'Use this when you need to find URLs about a topic. For getting the actual content of those URLs, use fetch_url or (preferred) search_and_read.',
+      'Search the web via DuckDuckGo or SearXNG (auto-selected). Returns {title, url, snippet}[]. ' +
+      'Optional `source` restricts to news/reddit/hackernews; optional `time_range` filters to recent results. ' +
+      'For getting URL content, prefer search_and_read.',
     inputSchema: {
       type: 'object',
       properties: {
         query: { type: 'string', description: 'Search query' },
         num_results: { type: 'integer', minimum: 1, maximum: 20, default: 5 },
+        source: {
+          type: 'string',
+          enum: ['web', 'news', 'reddit', 'hackernews'],
+          default: 'web',
+          description: 'Restrict to a specific source. reddit = real user discussion (less SEO noise); news = recent industry news; hackernews = tech discussion; web = open web (default).',
+        },
+        time_range: {
+          type: 'string',
+          enum: ['all', 'day', 'week', 'month', 'year'],
+          default: 'all',
+          description: 'Filter to recent results. Use for fast-moving topics where outdated info is harmful.',
+        },
       },
       required: ['query'],
     },
@@ -89,15 +109,25 @@ const TOOLS = [
   {
     name: 'search_and_read',
     description:
-      'Search the web AND extract clean markdown content from the top N results in one call. ' +
-      'This is usually the right tool for "research a topic" — it returns {query, results[]} where each ' +
-      "result has {title, url, snippet, content, truncated, error?}. Partial failures don't abort.",
+      'Search + extract content from top-N results in one call. The default research tool. ' +
+      'Returns {query, results: [{title, url, snippet, content, truncated, error?}]}. Partial failures do not abort. ' +
+      'Use source=reddit + time_range=year for "what do real users say recently"; source=news for industry updates.',
     inputSchema: {
       type: 'object',
       properties: {
         query: { type: 'string' },
         num_results: { type: 'integer', minimum: 1, maximum: 10, default: 3 },
         max_chars_per_result: { type: 'integer', minimum: 100, maximum: 50000, default: 8000 },
+        source: {
+          type: 'string',
+          enum: ['web', 'news', 'reddit', 'hackernews'],
+          default: 'web',
+        },
+        time_range: {
+          type: 'string',
+          enum: ['all', 'day', 'week', 'month', 'year'],
+          default: 'all',
+        },
       },
       required: ['query'],
     },
@@ -132,7 +162,7 @@ const TOOLS = [
 ];
 
 const server = new Server(
-  { name: 'research-mcp', version: '0.3.0' },
+  { name: 'research-mcp', version: '0.4.0' },
   { capabilities: { tools: {} } }
 );
 
@@ -143,11 +173,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   try {
     if (name === 'web_search') {
-      const { query, num_results } = WebSearchArgs.parse(args);
+      const { query, num_results, source, time_range } = WebSearchArgs.parse(args);
       const results = await webSearch(query, num_results, {
         cache, ttlMs: TTL_MS,
         backend: SEARCH_BACKEND,
         searxngUrl: SEARXNG_URL,
+        source,
+        timeRange: time_range,
       });
       return { content: [{ type: 'text', text: JSON.stringify({ query, results }, null, 2) }] };
     }
@@ -163,13 +195,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     if (name === 'search_and_read') {
-      const { query, num_results, max_chars_per_result } = SearchAndReadArgs.parse(args);
+      const { query, num_results, max_chars_per_result, source, time_range } = SearchAndReadArgs.parse(args);
       const result = await searchAndRead(query, {
         numResults: num_results,
         maxCharsPerResult: max_chars_per_result,
         cache,
         ttlMs: TTL_MS,
-        searchImpl: (q, n) => webSearch(q, n, { cache, ttlMs: TTL_MS, backend: SEARCH_BACKEND, searxngUrl: SEARXNG_URL }),
+        source,
+        timeRange: time_range,
+        searchImpl: (q, n, innerOpts) => webSearch(q, n, {
+          cache, ttlMs: TTL_MS, backend: SEARCH_BACKEND, searxngUrl: SEARXNG_URL,
+          source: innerOpts?.source ?? source,
+          timeRange: innerOpts?.timeRange ?? time_range,
+        }),
       });
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     }
@@ -211,4 +249,4 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
-process.stderr.write(`[research-mcp] v0.3.0 connected | db=${DB_PATH} | ttl=${TTL_HOURS}h | backend=${SEARCH_BACKEND} | searxng=${SEARXNG_URL} | extractors=${DISABLE_EXTRACTORS ? 'OFF' : 'ON'}\n`);
+process.stderr.write(`[research-mcp] v0.4.0 connected | db=${DB_PATH} | ttl=${TTL_HOURS}h | backend=${SEARCH_BACKEND} | searxng=${SEARXNG_URL} | extractors=${DISABLE_EXTRACTORS ? 'OFF' : 'ON'}\n`);

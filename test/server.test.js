@@ -46,6 +46,13 @@ test('server lists 5 tools including list_research and get_research', async () =
   assert.ok(listResp, 'expected tools/list response');
   const names = listResp.result.tools.map(t => t.name).sort();
   assert.deepEqual(names, ['fetch_url', 'get_research', 'list_research', 'search_and_read', 'web_search']);
+
+  const webSearchTool = listResp.result.tools.find(t => t.name === 'web_search');
+  assert.ok(webSearchTool.inputSchema.properties.source, 'web_search schema should include source');
+  assert.ok(webSearchTool.inputSchema.properties.time_range, 'web_search schema should include time_range');
+  const sarTool = listResp.result.tools.find(t => t.name === 'search_and_read');
+  assert.ok(sarTool.inputSchema.properties.source, 'search_and_read schema should include source');
+  assert.ok(sarTool.inputSchema.properties.time_range, 'search_and_read schema should include time_range');
 });
 
 test('server list_research returns empty entries on fresh DB', async () => {
