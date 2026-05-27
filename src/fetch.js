@@ -1,5 +1,7 @@
 import { curlFetch } from './http.js';
 import { cacheKeyFor } from './cacheKey.js';
+import { findExtractor } from './extractorRegistry.js';
+import { readabilityFetch } from './readability.js';
 
 const JINA_BASE = 'https://r.jina.ai/';
 
@@ -78,4 +80,77 @@ function extractTitle(markdown) {
   const h1Match = markdown.match(/^#\s+(.+)$/m);
   if (h1Match) return h1Match[1].trim();
   return null;
+}
+
+/**
+ * Composed fetcher: tries site-specific extractor → Jina → Readability.
+ * This is the new public default; jinaFetch remains exported for direct use.
+ *
+ * @param {string} url
+ * @param {object} [opts]
+ * @param {number} [opts.maxChars=20000]
+ * @param {object} [opts.cache]
+ * @param {number} [opts.ttlMs]
+ * @param {function} [opts.fetchImpl] - HTTP impl, passed through to leaf fetchers
+ * @param {boolean} [opts.disableExtractors=false]
+ * @param {object} [opts.extractorImpl] - inject for tests; { name, extract: fn }
+ * @param {function} [opts.jinaImpl=jinaFetch] - inject for tests
+ * @param {function} [opts.readabilityImpl=readabilityFetch] - inject for tests
+ * @returns {Promise<{url, title, content, truncated, error?, extractor?}>}
+ */
+export async function smartFetch(url, opts = {}) {
+  const {
+    maxChars = 20000,
+    cache,
+    ttlMs,
+    fetchImpl,
+    disableExtractors = false,
+    extractorImpl,
+    jinaImpl = jinaFetch,
+    readabilityImpl = readabilityFetch,
+  } = opts;
+
+  let cacheKey = null;
+  if (cache && ttlMs) {
+    cacheKey = cacheKeyFor('fetch_url', [url, maxChars]);
+    const hit = cache.get({ cacheKey, ttlMs });
+    if (hit) return hit.result;
+  }
+
+  const attempts = [];
+
+  if (!disableExtractors) {
+    const extractor = extractorImpl || findExtractor(url);
+    if (extractor) {
+      const r = await extractor.extract(url, { maxChars, fetchImpl });
+      attempts.push({ method: extractor.name, error: r.error });
+      if (!r.error && r.content) {
+        if (cache && cacheKey) cache.set({ tool: 'fetch_url', cacheKey, query: url, params: { max_chars: maxChars }, result: r });
+        return r;
+      }
+    }
+  }
+
+  {
+    const r = await jinaImpl(url, { maxChars, fetchImpl });
+    attempts.push({ method: 'jina', error: r.error });
+    if (!r.error && r.content) {
+      if (cache && cacheKey) cache.set({ tool: 'fetch_url', cacheKey, query: url, params: { max_chars: maxChars }, result: r });
+      return r;
+    }
+  }
+
+  {
+    const r = await readabilityImpl(url, { maxChars, fetchImpl });
+    attempts.push({ method: 'readability', error: r.error });
+    if (!r.error && r.content) {
+      if (cache && cacheKey) cache.set({ tool: 'fetch_url', cacheKey, query: url, params: { max_chars: maxChars }, result: r });
+      return r;
+    }
+  }
+
+  return {
+    url, title: null, content: null, truncated: false,
+    error: `all strategies failed: ${attempts.map(a => `${a.method}=${a.error || 'no content'}`).join('; ')}`,
+  };
 }

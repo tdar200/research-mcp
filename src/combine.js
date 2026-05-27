@@ -1,5 +1,5 @@
 import { duckDuckGoSearch } from './search.js';
-import { jinaFetch } from './fetch.js';
+import { smartFetch } from './fetch.js';
 import { cacheKeyFor } from './cacheKey.js';
 
 const MAX_NUM_RESULTS = 10;
@@ -21,7 +21,7 @@ export async function searchAndRead(query, opts = {}) {
     numResults = 3,
     maxCharsPerResult = 8000,
     searchImpl = duckDuckGoSearch,
-    fetchImpl = jinaFetch,
+    fetchImpl = smartFetch,
     cache,
     ttlMs,
   } = opts;
