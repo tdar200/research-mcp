@@ -1,6 +1,7 @@
 import { load } from 'cheerio';
 import { curlFetch } from './http.js';
 import { cacheKeyFor } from './cacheKey.js';
+import { searxngSearch, isSearxngReachable } from './searxng.js';
 
 /**
  * Parse a DuckDuckGo HTML search results page into structured results.
@@ -89,4 +90,45 @@ export async function duckDuckGoSearch(query, numResults = 5, opts = {}) {
   }
 
   return results;
+}
+
+/**
+ * Route a search query to either SearXNG or DuckDuckGo based on env/opts.
+ *
+ * @param {string} query
+ * @param {number} numResults
+ * @param {object} [opts]
+ * @param {string} [opts.backend='auto'] - 'auto' | 'searxng' | 'ddg'
+ * @param {string} [opts.searxngUrl] - passed through to searxng backend
+ * @param {object} [opts.cache]
+ * @param {number} [opts.ttlMs]
+ * @param {function} [opts.searxngImpl=searxngSearch] - inject for tests
+ * @param {function} [opts.ddgImpl=duckDuckGoSearch] - inject for tests
+ * @param {function} [opts.reachableImpl=isSearxngReachable] - inject for tests
+ * @returns {Promise<Array<{title, url, snippet}>>}
+ */
+export async function webSearch(query, numResults = 5, opts = {}) {
+  const {
+    backend = 'auto',
+    searxngUrl,
+    cache,
+    ttlMs,
+    searxngImpl = searxngSearch,
+    ddgImpl = duckDuckGoSearch,
+    reachableImpl = isSearxngReachable,
+  } = opts;
+
+  const downstreamOpts = { cache, ttlMs, baseUrl: searxngUrl };
+
+  if (backend === 'searxng') {
+    return await searxngImpl(query, numResults, downstreamOpts);
+  }
+  if (backend === 'ddg') {
+    return await ddgImpl(query, numResults, downstreamOpts);
+  }
+  const reachable = await reachableImpl(searxngUrl || 'http://localhost:8888');
+  if (reachable) {
+    return await searxngImpl(query, numResults, downstreamOpts);
+  }
+  return await ddgImpl(query, numResults, downstreamOpts);
 }

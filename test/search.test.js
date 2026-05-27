@@ -79,3 +79,72 @@ test('duckDuckGoSearch with no cache option still works (back-compat)', async ()
   const results = await duckDuckGoSearch('foo', 3, { fetchImpl: fakeFetch });
   assert.ok(results.length >= 1);
 });
+
+// ── webSearch router tests ──────────────────────────────────────────────────
+import { webSearch } from '../src/search.js';
+
+test('webSearch routes to searxng when backend=searxng', async () => {
+  const fakeSearxng = mock.fn(async () => [{ title: 'SX', url: 'https://x', snippet: 's' }]);
+  const fakeDdg = mock.fn(async () => { throw new Error('should not be called'); });
+  const results = await webSearch('foo', 3, {
+    backend: 'searxng',
+    searxngImpl: fakeSearxng,
+    ddgImpl: fakeDdg,
+  });
+  assert.equal(results[0].title, 'SX');
+  assert.equal(fakeSearxng.mock.calls.length, 1);
+  assert.equal(fakeDdg.mock.calls.length, 0);
+});
+
+test('webSearch routes to ddg when backend=ddg', async () => {
+  const fakeSearxng = mock.fn(async () => { throw new Error('should not be called'); });
+  const fakeDdg = mock.fn(async () => [{ title: 'DG', url: 'https://x', snippet: 's' }]);
+  const results = await webSearch('foo', 3, {
+    backend: 'ddg',
+    searxngImpl: fakeSearxng,
+    ddgImpl: fakeDdg,
+  });
+  assert.equal(results[0].title, 'DG');
+});
+
+test('webSearch in auto mode tries searxng first when reachable', async () => {
+  const fakeSearxng = mock.fn(async () => [{ title: 'SX', url: 'https://x', snippet: 's' }]);
+  const fakeDdg = mock.fn(async () => { throw new Error('should not be called'); });
+  const fakeProbe = mock.fn(async () => true);
+  const results = await webSearch('foo', 3, {
+    backend: 'auto',
+    searxngImpl: fakeSearxng,
+    ddgImpl: fakeDdg,
+    reachableImpl: fakeProbe,
+  });
+  assert.equal(results[0].title, 'SX');
+});
+
+test('webSearch in auto mode falls back to ddg when searxng unreachable', async () => {
+  const fakeSearxng = mock.fn(async () => { throw new Error('should not be called'); });
+  const fakeDdg = mock.fn(async () => [{ title: 'DG', url: 'https://x', snippet: 's' }]);
+  const fakeProbe = mock.fn(async () => false);
+  const results = await webSearch('foo', 3, {
+    backend: 'auto',
+    searxngImpl: fakeSearxng,
+    ddgImpl: fakeDdg,
+    reachableImpl: fakeProbe,
+  });
+  assert.equal(results[0].title, 'DG');
+});
+
+test('webSearch passes cache and ttlMs through to underlying backend', async () => {
+  let captured = null;
+  const fakeSearxng = mock.fn(async (q, n, opts) => { captured = opts; return []; });
+  const fakeProbe = mock.fn(async () => true);
+  const fakeCache = { get: () => null, set: () => {} };
+  await webSearch('foo', 3, {
+    backend: 'auto',
+    searxngImpl: fakeSearxng,
+    reachableImpl: fakeProbe,
+    cache: fakeCache,
+    ttlMs: 60_000,
+  });
+  assert.equal(captured.cache, fakeCache);
+  assert.equal(captured.ttlMs, 60_000);
+});
