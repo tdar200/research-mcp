@@ -108,3 +108,37 @@ test('jinaFetch does NOT cache error responses', async () => {
   assert.ok(result.error, 'should have error');
   assert.equal(fakeCache.set.mock.calls.length, 0, 'should not cache errors');
 });
+
+test('jinaFetch sends X-Remove-Selector header to strip nav/header/banner noise', async () => {
+  let capturedHeaders = null;
+  const fakeFetch = mock.fn(async (url, opts) => {
+    capturedHeaders = opts.headers;
+    return { ok: true, status: 200, statusText: 'OK', text: async () => 'content' };
+  });
+  await jinaFetch('https://example.com', { fetchImpl: fakeFetch });
+  assert.ok(capturedHeaders['X-Remove-Selector'], 'X-Remove-Selector header should be sent');
+  assert.match(capturedHeaders['X-Remove-Selector'], /header/);
+  assert.match(capturedHeaders['X-Remove-Selector'], /footer/);
+  assert.match(capturedHeaders['X-Remove-Selector'], /nav/);
+});
+
+test('jinaFetch sends X-Target-Selector header to focus extraction', async () => {
+  let capturedHeaders = null;
+  const fakeFetch = mock.fn(async (url, opts) => {
+    capturedHeaders = opts.headers;
+    return { ok: true, status: 200, statusText: 'OK', text: async () => 'content' };
+  });
+  await jinaFetch('https://example.com', { fetchImpl: fakeFetch });
+  assert.ok(capturedHeaders['X-Target-Selector'], 'X-Target-Selector header should be sent');
+  assert.match(capturedHeaders['X-Target-Selector'], /article|main/);
+});
+
+test('jinaFetch sends X-Return-Format header', async () => {
+  let capturedHeaders = null;
+  const fakeFetch = mock.fn(async (url, opts) => {
+    capturedHeaders = opts.headers;
+    return { ok: true, status: 200, statusText: 'OK', text: async () => 'content' };
+  });
+  await jinaFetch('https://example.com', { fetchImpl: fakeFetch });
+  assert.equal(capturedHeaders['X-Return-Format'], 'markdown');
+});

@@ -32,7 +32,12 @@ export async function jinaFetch(url, opts = {}) {
 
   try {
     const res = await fetchImpl(`${JINA_BASE}${url}`, {
-      headers: { 'Accept': 'text/markdown' },
+      headers: {
+        'Accept': 'text/markdown',
+        'X-Return-Format': 'markdown',
+        'X-Remove-Selector': 'header, nav, footer, .announcement, .announcement-bar, .popup, .cookie-banner, .modal, [class*="banner"]',
+        'X-Target-Selector': 'article, main, [itemtype], .product-detail, .post-content, .markdown-body',
+      },
       timeoutMs,
     });
 
