@@ -1,4 +1,5 @@
 import { curlFetch } from './http.js';
+import { cacheKeyFor } from './cacheKey.js';
 
 const JINA_BASE = 'https://r.jina.ai/';
 
@@ -16,7 +17,16 @@ export async function jinaFetch(url, opts = {}) {
     maxChars = 20000,
     fetchImpl = curlFetch,
     timeoutMs = 15000,
+    cache,
+    ttlMs,
   } = opts;
+
+  let cacheKey = null;
+  if (cache && ttlMs) {
+    cacheKey = cacheKeyFor('fetch_url', [url, maxChars]);
+    const hit = cache.get({ cacheKey, ttlMs });
+    if (hit) return hit.result;
+  }
 
   try {
     const res = await fetchImpl(`${JINA_BASE}${url}`, {
@@ -29,6 +39,7 @@ export async function jinaFetch(url, opts = {}) {
       const error = res.status === 429
         ? `rate limit (429): ${res.statusText}`
         : `${res.status} ${res.statusText}${bodyExcerpt ? `: ${bodyExcerpt}` : ''}`;
+      // Do NOT cache errors — network blips shouldn't pollute the cache.
       return { url, title: null, content: null, truncated: false, error };
     }
 
@@ -36,8 +47,19 @@ export async function jinaFetch(url, opts = {}) {
     const title = extractTitle(raw);
     const truncated = raw.length > maxChars;
     const content = truncated ? raw.slice(0, maxChars) : raw;
+    const result = { url, title, content, truncated };
 
-    return { url, title, content, truncated };
+    if (cache && cacheKey) {
+      cache.set({
+        tool: 'fetch_url',
+        cacheKey,
+        query: url,
+        params: { max_chars: maxChars },
+        result,
+      });
+    }
+
+    return result;
   } catch (err) {
     return {
       url,

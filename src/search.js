@@ -1,5 +1,6 @@
 import { load } from 'cheerio';
 import { curlFetch } from './http.js';
+import { cacheKeyFor } from './cacheKey.js';
 
 /**
  * Parse a DuckDuckGo HTML search results page into structured results.
@@ -49,10 +50,18 @@ export function parseDuckDuckGoHtml(html, numResults) {
  * @param {number} numResults
  * @returns {Promise<Array<{title, url, snippet}>>}
  */
-export async function duckDuckGoSearch(query, numResults = 5) {
-  const params = new URLSearchParams({ q: query });
+export async function duckDuckGoSearch(query, numResults = 5, opts = {}) {
+  const { cache, ttlMs, fetchImpl = curlFetch } = opts;
 
-  const res = await curlFetch('https://html.duckduckgo.com/html/', {
+  let cacheKey = null;
+  if (cache && ttlMs) {
+    cacheKey = cacheKeyFor('web_search', [query, numResults]);
+    const hit = cache.get({ cacheKey, ttlMs });
+    if (hit) return hit.result;
+  }
+
+  const params = new URLSearchParams({ q: query });
+  const res = await fetchImpl('https://html.duckduckgo.com/html/', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
@@ -67,5 +76,17 @@ export async function duckDuckGoSearch(query, numResults = 5) {
   }
 
   const html = await res.text();
-  return parseDuckDuckGoHtml(html, numResults);
+  const results = parseDuckDuckGoHtml(html, numResults);
+
+  if (cache && cacheKey) {
+    cache.set({
+      tool: 'web_search',
+      cacheKey,
+      query,
+      params: { num_results: numResults },
+      result: results,
+    });
+  }
+
+  return results;
 }

@@ -63,3 +63,48 @@ test('jinaFetch extracts title from first markdown heading if present', async ()
 
   assert.equal(result.title, 'Doc Title');
 });
+
+test('jinaFetch returns cached entry when cache hit', async () => {
+  const fakeFetch = mock.fn(async () => { throw new Error('should not be called'); });
+  const fakeCache = {
+    get: mock.fn(() => ({
+      result: { url: 'https://x.test', title: 'Cached', content: 'cached body', truncated: false },
+    })),
+    set: mock.fn(),
+  };
+
+  const result = await jinaFetch('https://x.test', {
+    maxChars: 1000,
+    fetchImpl: fakeFetch,
+    cache: fakeCache,
+    ttlMs: 60_000,
+  });
+  assert.equal(result.content, 'cached body');
+  assert.equal(fakeFetch.mock.calls.length, 0);
+});
+
+test('jinaFetch stores successful fetch in cache', async () => {
+  const fakeFetch = mock.fn(async () => ({ ok: true, status: 200, statusText: 'OK', text: async () => 'Title: T\n\nbody' }));
+  const fakeCache = {
+    get: mock.fn(() => null),
+    set: mock.fn(),
+  };
+
+  await jinaFetch('https://x.test', { maxChars: 1000, fetchImpl: fakeFetch, cache: fakeCache, ttlMs: 60_000 });
+  assert.equal(fakeCache.set.mock.calls.length, 1);
+  const stored = fakeCache.set.mock.calls[0].arguments[0];
+  assert.equal(stored.tool, 'fetch_url');
+  assert.equal(stored.query, 'https://x.test');
+});
+
+test('jinaFetch does NOT cache error responses', async () => {
+  const fakeFetch = mock.fn(async () => ({ ok: false, status: 429, statusText: 'Too Many', text: async () => '' }));
+  const fakeCache = {
+    get: mock.fn(() => null),
+    set: mock.fn(),
+  };
+
+  const result = await jinaFetch('https://x.test', { maxChars: 1000, fetchImpl: fakeFetch, cache: fakeCache, ttlMs: 60_000 });
+  assert.ok(result.error, 'should have error');
+  assert.equal(fakeCache.set.mock.calls.length, 0, 'should not cache errors');
+});
