@@ -5,6 +5,9 @@ import dns from 'node:dns';
 // handles this transparently; Node does not. Affects both search and fetch.
 dns.setDefaultResultOrder('ipv4first');
 
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
@@ -16,6 +19,13 @@ import { z } from 'zod';
 import { duckDuckGoSearch } from './search.js';
 import { jinaFetch } from './fetch.js';
 import { searchAndRead } from './combine.js';
+import { Cache } from './cache.js';
+
+const DB_PATH = process.env.RESEARCH_MCP_DB_PATH || join(homedir(), '.research-mcp', 'cache.db');
+const TTL_HOURS = Number(process.env.RESEARCH_MCP_CACHE_TTL_HOURS ?? 24);
+const TTL_MS = Number.isFinite(TTL_HOURS) && TTL_HOURS > 0 ? TTL_HOURS * 3600 * 1000 : 0;
+
+const cache = new Cache({ dbPath: DB_PATH });
 
 const WebSearchArgs = z.object({
   query: z.string().min(1),
@@ -31,6 +41,15 @@ const SearchAndReadArgs = z.object({
   query: z.string().min(1),
   num_results: z.number().int().min(1).max(10).optional().default(3),
   max_chars_per_result: z.number().int().min(100).max(50000).optional().default(8000),
+});
+
+const ListResearchArgs = z.object({
+  limit: z.number().int().min(1).max(100).optional().default(20),
+  tool_filter: z.enum(['web_search', 'fetch_url', 'search_and_read']).optional(),
+});
+
+const GetResearchArgs = z.object({
+  id: z.number().int().min(1),
 });
 
 const TOOLS = [
@@ -79,10 +98,37 @@ const TOOLS = [
       required: ['query'],
     },
   },
+  {
+    name: 'list_research',
+    description:
+      'List recent cached research queries (newest first). Use this BEFORE calling search_and_read ' +
+      "if you suspect the user has asked something similar recently — it's free and instant. " +
+      'Returns {entries: [{id, tool, query, created_at_iso, age_hours, params}]}.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
+        tool_filter: { type: 'string', enum: ['web_search', 'fetch_url', 'search_and_read'] },
+      },
+    },
+  },
+  {
+    name: 'get_research',
+    description:
+      'Retrieve the full cached result of a prior research query by its id (from list_research). ' +
+      'Zero network calls. Returns {tool, query, params, result, created_at_iso, age_hours}.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'integer', minimum: 1 },
+      },
+      required: ['id'],
+    },
+  },
 ];
 
 const server = new Server(
-  { name: 'research-mcp', version: '0.1.0' },
+  { name: 'research-mcp', version: '0.2.0' },
   { capabilities: { tools: {} } }
 );
 
@@ -94,18 +140,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   try {
     if (name === 'web_search') {
       const { query, num_results } = WebSearchArgs.parse(args);
-      const results = await duckDuckGoSearch(query, num_results);
-      return {
-        content: [{ type: 'text', text: JSON.stringify({ query, results }, null, 2) }],
-      };
+      const results = await duckDuckGoSearch(query, num_results, { cache, ttlMs: TTL_MS });
+      return { content: [{ type: 'text', text: JSON.stringify({ query, results }, null, 2) }] };
     }
 
     if (name === 'fetch_url') {
       const { url, max_chars } = FetchUrlArgs.parse(args);
-      const result = await jinaFetch(url, { maxChars: max_chars });
-      return {
-        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
-      };
+      const result = await jinaFetch(url, { maxChars: max_chars, cache, ttlMs: TTL_MS });
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     }
 
     if (name === 'search_and_read') {
@@ -113,9 +155,35 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const result = await searchAndRead(query, {
         numResults: num_results,
         maxCharsPerResult: max_chars_per_result,
+        cache,
+        ttlMs: TTL_MS,
       });
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    }
+
+    if (name === 'list_research') {
+      const { limit, tool_filter } = ListResearchArgs.parse(args);
+      const entries = cache.list({ limit, toolFilter: tool_filter });
+      return { content: [{ type: 'text', text: JSON.stringify({ entries }, null, 2) }] };
+    }
+
+    if (name === 'get_research') {
+      const { id } = GetResearchArgs.parse(args);
+      const entry = cache.getById(id);
+      if (!entry) throw new Error(`No cached research with id=${id}. Use list_research to find valid ids.`);
       return {
-        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            id: entry.id,
+            tool: entry.tool,
+            query: entry.query,
+            params: entry.params,
+            result: entry.result,
+            created_at_iso: entry.created_at_iso,
+            age_hours: Math.round((Date.now() - entry.created_at) / 36e4) / 100,
+          }, null, 2),
+        }],
       };
     }
 
@@ -130,4 +198,4 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
-process.stderr.write('[research-mcp] connected via stdio\n');
+process.stderr.write(`[research-mcp] v0.2.0 connected via stdio | db=${DB_PATH} | ttl=${TTL_HOURS}h\n`);
