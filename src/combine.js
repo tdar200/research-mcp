@@ -35,7 +35,7 @@ export async function searchAndRead(query, opts = {}) {
     if (hit) return hit.result;
   }
 
-  const searchResults = await searchImpl(query, capped);
+  const searchResults = await searchImpl(query, capped, { source: opts.source, timeRange: opts.timeRange });
 
   if (searchResults.length === 0) {
     // Don't cache empty searches — may be transient (parser drift, DDG hiccup).

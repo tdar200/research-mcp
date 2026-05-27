@@ -201,3 +201,18 @@ test('duckDuckGoSearch with timeRange=all omits df param', async () => {
   await duckDuckGoSearch('foo', 5, { fetchImpl: fakeFetch, timeRange: 'all' });
   assert.doesNotMatch(capturedBody, /df=/);
 });
+
+test('webSearch passes source and timeRange through to underlying backend', async () => {
+  let captured = null;
+  const fakeSearxng = mock.fn(async (q, n, opts) => { captured = opts; return []; });
+  const fakeProbe = mock.fn(async () => true);
+  await webSearch('foo', 3, {
+    backend: 'auto',
+    searxngImpl: fakeSearxng,
+    reachableImpl: fakeProbe,
+    source: 'reddit',
+    timeRange: 'month',
+  });
+  assert.equal(captured.source, 'reddit');
+  assert.equal(captured.timeRange, 'month');
+});

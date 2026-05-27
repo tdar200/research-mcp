@@ -116,6 +116,23 @@ test('searchAndRead caches the combined result and returns it on hit', async () 
   assert.equal(fakeFetch.mock.calls.length, 1, 'should not fetch again');
 });
 
+test('searchAndRead passes source and timeRange through to searchImpl', async () => {
+  let captured = null;
+  const fakeSearch = mock.fn(async (q, n, opts) => { captured = opts; return []; });
+  const fakeFetch = mock.fn(async () => ({}));
+
+  await searchAndRead('foo', {
+    numResults: 3,
+    searchImpl: fakeSearch,
+    fetchImpl: fakeFetch,
+    source: 'reddit',
+    timeRange: 'year',
+  });
+  assert.ok(captured, 'searchImpl should have received opts');
+  assert.equal(captured.source, 'reddit');
+  assert.equal(captured.timeRange, 'year');
+});
+
 test('searchAndRead does not cache if any result has an error', async () => {
   const fakeSearch = mock.fn(async () => [
     { title: 'A', url: 'https://a.test', snippet: 'a' },
