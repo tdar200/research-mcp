@@ -51,17 +51,54 @@ export function parseDuckDuckGoHtml(html, numResults) {
  * @param {number} numResults
  * @returns {Promise<Array<{title, url, snippet}>>}
  */
+/** Map our `source` enum to a `site:` prefix for DDG queries. */
+function ddgSourcePrefix(source) {
+  switch (source) {
+    case 'reddit':     return 'site:reddit.com ';
+    case 'hackernews': return 'site:news.ycombinator.com ';
+    case 'news':       return 'site:reuters.com OR site:bloomberg.com OR site:techcrunch.com ';
+    case 'web':
+    case undefined:
+    case null:
+    case '':
+      return '';
+    default:
+      return '';
+  }
+}
+
+/** Map our `time_range` enum to DDG's `df` form param value (or null). */
+function ddgTimeParam(timeRange) {
+  switch (timeRange) {
+    case 'day':   return 'd';
+    case 'week':  return 'w';
+    case 'month': return 'm';
+    case 'year':  return 'y';
+    case 'all':
+    case undefined:
+    case null:
+    case '':
+      return null;
+    default:
+      return null;
+  }
+}
+
 export async function duckDuckGoSearch(query, numResults = 5, opts = {}) {
-  const { cache, ttlMs, fetchImpl = curlFetch } = opts;
+  const { cache, ttlMs, fetchImpl = curlFetch, source = 'web', timeRange = 'all' } = opts;
 
   let cacheKey = null;
   if (cache && ttlMs) {
-    cacheKey = cacheKeyFor('web_search', [query, numResults]);
+    cacheKey = cacheKeyFor('web_search', [query, numResults, source, timeRange]);
     const hit = cache.get({ cacheKey, ttlMs });
     if (hit) return hit.result;
   }
 
-  const params = new URLSearchParams({ q: query });
+  const finalQuery = ddgSourcePrefix(source) + query;
+  const params = new URLSearchParams({ q: finalQuery });
+  const df = ddgTimeParam(timeRange);
+  if (df) params.set('df', df);
+
   const res = await fetchImpl('https://html.duckduckgo.com/html/', {
     method: 'POST',
     headers: {
@@ -84,7 +121,7 @@ export async function duckDuckGoSearch(query, numResults = 5, opts = {}) {
       tool: 'web_search',
       cacheKey,
       query,
-      params: { num_results: numResults },
+      params: { num_results: numResults, source, time_range: timeRange },
       result: results,
     });
   }
@@ -113,12 +150,14 @@ export async function webSearch(query, numResults = 5, opts = {}) {
     searxngUrl,
     cache,
     ttlMs,
+    source = 'web',
+    timeRange = 'all',
     searxngImpl = searxngSearch,
     ddgImpl = duckDuckGoSearch,
     reachableImpl = isSearxngReachable,
   } = opts;
 
-  const downstreamOpts = { cache, ttlMs, baseUrl: searxngUrl };
+  const downstreamOpts = { cache, ttlMs, baseUrl: searxngUrl, source, timeRange };
 
   if (backend === 'searxng') {
     return await searxngImpl(query, numResults, downstreamOpts);

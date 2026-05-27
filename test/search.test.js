@@ -148,3 +148,56 @@ test('webSearch passes cache and ttlMs through to underlying backend', async () 
   assert.equal(captured.cache, fakeCache);
   assert.equal(captured.ttlMs, 60_000);
 });
+
+// ── v0.4.0: DDG source + timeRange ─────────────────────────────────────────
+
+test('duckDuckGoSearch with source=reddit prepends site:reddit.com to query', async () => {
+  let capturedBody = null;
+  const fakeFetch = mock.fn(async (url, opts) => {
+    capturedBody = opts.body;
+    return { ok: true, status: 200, statusText: 'OK', text: async () => '<html></html>' };
+  });
+  await duckDuckGoSearch('Foodhub pricing', 5, { fetchImpl: fakeFetch, source: 'reddit' });
+  assert.match(capturedBody, /q=site%3Areddit\.com\+Foodhub\+pricing/);
+});
+
+test('duckDuckGoSearch with source=hackernews prepends site:news.ycombinator.com', async () => {
+  let capturedBody = null;
+  const fakeFetch = mock.fn(async (url, opts) => {
+    capturedBody = opts.body;
+    return { ok: true, status: 200, statusText: 'OK', text: async () => '<html></html>' };
+  });
+  await duckDuckGoSearch('rust async', 5, { fetchImpl: fakeFetch, source: 'hackernews' });
+  assert.match(capturedBody, /q=site%3Anews\.ycombinator\.com\+rust\+async/);
+});
+
+test('duckDuckGoSearch with source=web does not modify query', async () => {
+  let capturedBody = null;
+  const fakeFetch = mock.fn(async (url, opts) => {
+    capturedBody = opts.body;
+    return { ok: true, status: 200, statusText: 'OK', text: async () => '<html></html>' };
+  });
+  await duckDuckGoSearch('plain query', 5, { fetchImpl: fakeFetch, source: 'web' });
+  assert.doesNotMatch(capturedBody, /site%3A/);
+  assert.match(capturedBody, /q=plain\+query/);
+});
+
+test('duckDuckGoSearch with timeRange=year adds df=y to form body', async () => {
+  let capturedBody = null;
+  const fakeFetch = mock.fn(async (url, opts) => {
+    capturedBody = opts.body;
+    return { ok: true, status: 200, statusText: 'OK', text: async () => '<html></html>' };
+  });
+  await duckDuckGoSearch('foo', 5, { fetchImpl: fakeFetch, timeRange: 'year' });
+  assert.match(capturedBody, /df=y/);
+});
+
+test('duckDuckGoSearch with timeRange=all omits df param', async () => {
+  let capturedBody = null;
+  const fakeFetch = mock.fn(async (url, opts) => {
+    capturedBody = opts.body;
+    return { ok: true, status: 200, statusText: 'OK', text: async () => '<html></html>' };
+  });
+  await duckDuckGoSearch('foo', 5, { fetchImpl: fakeFetch, timeRange: 'all' });
+  assert.doesNotMatch(capturedBody, /df=/);
+});
