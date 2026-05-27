@@ -57,9 +57,14 @@ Examples worth committing to muscle memory:
    - `X-Target-Selector` focuses on article/main/product-detail
    - Handles JS-rendered pages
 
-4. **`@mozilla/readability` + jsdom** (local extraction, no external dep)
+4. **Crawl4AI** self-hosted Docker service (v0.6.0, optional)
+   - Real Chromium via Playwright — handles JS-heavy SPAs + anti-bot detection
+   - Skipped transparently if container isn't running
+   - `DISABLE_CRAWL4AI=1` to skip even when running
 
-5. **All failed** → aggregated error so the agent knows nothing worked
+5. **`@mozilla/readability` + jsdom** (local extraction, no external dep)
+
+6. **All failed** → aggregated error so the agent knows nothing worked
 
 Disable extractors with `DISABLE_EXTRACTORS=1` (debugging / opt-out).
 
@@ -75,6 +80,21 @@ docker compose up -d searxng
 Verify: `curl http://localhost:8888/healthz` → 200.
 
 Stop with `docker compose down`. Logs: `docker compose logs -f searxng`.
+
+### Optional: start Crawl4AI for JS-heavy / anti-bot sites
+
+```bash
+cd ~/Projects/research-mcp
+docker compose up -d crawl4ai
+```
+
+Verify: `curl http://localhost:11235/health` → 200.
+
+Playground UI at `http://localhost:11235/playground` for testing crawls + tweaking configs.
+
+Crawl4AI sits in `smartFetch` between Jina Reader and Mozilla Readability. If unreachable, it's transparently skipped — Jina/Readability handle the load.
+
+To disable Crawl4AI even when running: set `DISABLE_CRAWL4AI=1` in env.
 
 ### Register with Claude Code (one-time, at user scope)
 
@@ -94,6 +114,8 @@ Verify: `claude mcp list | grep research-mcp` → `✓ Connected`.
 | `SEARXNG_URL` | `http://localhost:8888` | SearXNG base URL |
 | `DISABLE_EXTRACTORS` | unset | Set to `1` to skip site-specific extractors |
 | `GITHUB_TOKEN` | unset | Optional; raises GitHub API limit 60/hr → 5000/hr |
+| `CRAWL4AI_URL` | `http://localhost:11235` | Crawl4AI service URL |
+| `DISABLE_CRAWL4AI` | unset | Set to `1` to skip Crawl4AI in smartFetch cascade |
 
 ## Tests
 
