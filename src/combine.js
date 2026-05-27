@@ -1,5 +1,6 @@
 import { duckDuckGoSearch } from './search.js';
 import { jinaFetch } from './fetch.js';
+import { cacheKeyFor } from './cacheKey.js';
 
 const MAX_NUM_RESULTS = 10;
 
@@ -21,12 +22,23 @@ export async function searchAndRead(query, opts = {}) {
     maxCharsPerResult = 8000,
     searchImpl = duckDuckGoSearch,
     fetchImpl = jinaFetch,
+    cache,
+    ttlMs,
   } = opts;
 
   const capped = Math.min(Math.max(1, numResults), MAX_NUM_RESULTS);
+
+  let cacheKey = null;
+  if (cache && ttlMs) {
+    cacheKey = cacheKeyFor('search_and_read', [query, capped, maxCharsPerResult]);
+    const hit = cache.get({ cacheKey, ttlMs });
+    if (hit) return hit.result;
+  }
+
   const searchResults = await searchImpl(query, capped);
 
   if (searchResults.length === 0) {
+    // Don't cache empty searches — may be transient (parser drift, DDG hiccup).
     return { query, results: [] };
   }
 
@@ -44,5 +56,18 @@ export async function searchAndRead(query, opts = {}) {
     })
   );
 
-  return { query, results: enriched };
+  const out = { query, results: enriched };
+
+  const hasErrors = enriched.some(r => r.error);
+  if (cache && cacheKey && !hasErrors) {
+    cache.set({
+      tool: 'search_and_read',
+      cacheKey,
+      query,
+      params: { num_results: capped, max_chars_per_result: maxCharsPerResult },
+      result: out,
+    });
+  }
+
+  return out;
 }

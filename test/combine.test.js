@@ -76,3 +76,64 @@ test('searchAndRead caps numResults at 10', async () => {
 
   await searchAndRead('q', { numResults: 99, searchImpl: fakeSearch, fetchImpl: fakeFetch });
 });
+
+test('searchAndRead caches the combined result and returns it on hit', async () => {
+  const fakeSearch = mock.fn(async () => [
+    { title: 'A', url: 'https://a.test', snippet: 's' },
+  ]);
+  const fakeFetch = mock.fn(async (url) => ({
+    url, title: 'A', content: 'A body', truncated: false,
+  }));
+
+  let storedResult = null;
+  const fakeCache = {
+    get: mock.fn(() => storedResult ? { result: storedResult } : null),
+    set: mock.fn((entry) => { storedResult = entry.result; }),
+  };
+
+  const out1 = await searchAndRead('q', {
+    numResults: 1,
+    searchImpl: fakeSearch,
+    fetchImpl: fakeFetch,
+    cache: fakeCache,
+    ttlMs: 60_000,
+  });
+  assert.equal(out1.results[0].content, 'A body');
+  assert.equal(fakeSearch.mock.calls.length, 1);
+  assert.equal(fakeFetch.mock.calls.length, 1);
+  assert.equal(fakeCache.set.mock.calls.length, 1);
+  assert.equal(fakeCache.set.mock.calls[0].arguments[0].tool, 'search_and_read');
+
+  const out2 = await searchAndRead('q', {
+    numResults: 1,
+    searchImpl: fakeSearch,
+    fetchImpl: fakeFetch,
+    cache: fakeCache,
+    ttlMs: 60_000,
+  });
+  assert.deepEqual(out2, out1);
+  assert.equal(fakeSearch.mock.calls.length, 1, 'should not search again');
+  assert.equal(fakeFetch.mock.calls.length, 1, 'should not fetch again');
+});
+
+test('searchAndRead does not cache if any result has an error', async () => {
+  const fakeSearch = mock.fn(async () => [
+    { title: 'A', url: 'https://a.test', snippet: 'a' },
+    { title: 'B', url: 'https://b.test', snippet: 'b' },
+  ]);
+  const fakeFetch = mock.fn(async (url) => {
+    if (url.includes('b.test')) return { url, content: null, truncated: false, error: 'oops' };
+    return { url, content: 'ok', truncated: false };
+  });
+
+  const fakeCache = { get: mock.fn(() => null), set: mock.fn() };
+
+  await searchAndRead('q', {
+    numResults: 2,
+    searchImpl: fakeSearch,
+    fetchImpl: fakeFetch,
+    cache: fakeCache,
+    ttlMs: 60_000,
+  });
+  assert.equal(fakeCache.set.mock.calls.length, 0, 'partial failures should not be cached');
+});
