@@ -50,6 +50,44 @@ Indices on `(created_at DESC)` and `(tool, created_at DESC)`.
 
 **Migration:** Schema created via single `CREATE TABLE IF NOT EXISTS` at startup. No versioning yet (Tier 3 problem).
 
+## v0.3.0 — Multi-backend search + smart extractors (Tier 2 + Tier 3c)
+
+Adds two orthogonal layers that improve recall and content quality without changing the public tool surface.
+
+### Tier 2: SearXNG meta-search + Readability fallback
+
+**SearXNG** (self-hosted Docker container) replaces direct DuckDuckGo scraping as the default search backend. Queries 70+ engines in parallel (Google, Bing, Brave, DDG, Wikipedia, Stack Overflow, GitHub, etc.), merges + deduplicates, returns clean JSON. Configured via `SEARCH_BACKEND` env (`auto` | `searxng` | `ddg`) and `SEARXNG_URL` env (default `http://localhost:8888`). When `auto`, the router probes `/healthz` on first use; reachable → searxng, else → ddg. DDG remains as a built-in fallback for zero-infra-mode.
+
+**Mozilla Readability fallback** (`src/readability.js`) — when Jina Reader fails (rate-limited, network error, or returns empty), the fetcher falls back to fetching the raw HTML via `curl` and running Mozilla Readability + jsdom locally. No external service dependency. Trade: doesn't handle JS-rendered pages (Jina's headless browser does).
+
+### Tier 3c: Site-specific extractors
+
+URL-pattern routing in `src/extractorRegistry.js` directs known sites to dedicated extractors that use the site's own API instead of generic HTML scraping. Composition via `smartFetch(url)`:
+
+  1. **Match URL against registry.** If matched → call site-specific extractor.
+  2. **If extractor missing/fails → call Jina Reader.**
+  3. **If Jina fails → call Mozilla Readability fallback.**
+  4. **If all three fail → return aggregated error** so the agent knows nothing worked.
+
+| Site | URL pattern | Source | Output |
+|------|-------------|--------|--------|
+| GitHub repo | `github.com/<owner>/<repo>` | `api.github.com/repos/X/Y/readme` + `/repos/X/Y` | README + stars/lang/topics |
+| GitHub issue/PR | `github.com/<owner>/<repo>/(issues\|pull)/<n>` | `api.github.com/repos/X/Y/issues/N` + comments | Title, body, top-5 comments |
+| NPM package | `npmjs.com/package/<pkg>` | `registry.npmjs.org/<pkg>` | Name, version, README, deps, links |
+| Stack Overflow | `stackoverflow.com/questions/<id>` | `api.stackexchange.com/2.3/questions/<id>` | Question + top-3 answers |
+| MDN docs | `developer.mozilla.org/...` | direct HTML + cheerio (`.main-page-content`) | Title + cleaned main content |
+
+Disable with `DISABLE_EXTRACTORS=1` (debugging / opt-out). Optional `GITHUB_TOKEN` env raises GitHub API rate limit 60/hr → 5000/hr.
+
+### Cache contract
+
+Unchanged from v0.2.0. Same `(tool, params)` cache key regardless of which backend or extractor served the result.
+
+### Non-goals carried forward
+
+- **Tier 3a** (query expansion via Claude) — deferred. Open question: can the MCP server reuse Claude Code's session credentials (MCP sampling protocol) instead of needing a separate Anthropic API key?
+- **Tier 3b** (semantic reranking via Cohere) — deferred until Cohere key is added.
+
 ## Non-goals (deferred to Tier 2+)
 
 - Self-hosted search (SearXNG) — DuckDuckGo HTML scrape is enough for MVP.

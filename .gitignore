@@ -1,3 +1,7 @@
 node_modules/
 .env
 *.log
+
+# SearXNG generated state (settings.yml is kept; runtime artifacts aren't)
+searxng-config/uwsgi.ini
+searxng-config/*.log

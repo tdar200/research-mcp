@@ -1,0 +1,13 @@
+use_default_settings: true
+general:
+  instance_name: "research-mcp-searxng"
+search:
+  formats:
+    - html
+    - json
+server:
+  secret_key: "research-mcp-local-only-change-if-exposing-publicly"
+  limiter: false
+  image_proxy: false
+ui:
+  static_use_hash: true
