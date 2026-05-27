@@ -162,7 +162,7 @@ const TOOLS = [
 ];
 
 const server = new Server(
-  { name: 'research-mcp', version: '0.4.0' },
+  { name: 'research-mcp', version: '0.5.0' },
   { capabilities: { tools: {} } }
 );
 
@@ -249,4 +249,4 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
-process.stderr.write(`[research-mcp] v0.4.0 connected | db=${DB_PATH} | ttl=${TTL_HOURS}h | backend=${SEARCH_BACKEND} | searxng=${SEARXNG_URL} | extractors=${DISABLE_EXTRACTORS ? 'OFF' : 'ON'}\n`);
+process.stderr.write(`[research-mcp] v0.5.0 connected | db=${DB_PATH} | ttl=${TTL_HOURS}h | backend=${SEARCH_BACKEND} | searxng=${SEARXNG_URL} | extractors=${DISABLE_EXTRACTORS ? 'OFF' : 'ON'}\n`);

@@ -38,16 +38,28 @@ Examples worth committing to muscle memory:
 
 `fetch_url` and `search_and_read` internally use `smartFetch`:
 
-1. **URL matches registered pattern?**
+1. **URL matches registered site-specific extractor?**
    - `github.com/X/Y` → GitHub API (repo README + metadata)
    - `github.com/X/Y/issues/N` or `/pull/N` → GitHub API (issue + top comments)
    - `npmjs.com/package/X` → npm registry (package metadata + README)
    - `stackoverflow.com/questions/N` → Stack Exchange API (Q + top 3 answers)
    - `developer.mozilla.org/...` → MDN cheerio (.main-page-content)
-   - → YES: try it; on success return
-2. **Fall through to Jina Reader** (handles JS-rendered pages)
-3. **Fall through to `@mozilla/readability` + jsdom** (local extraction, no external dep)
-4. **All three failed** → aggregated error so the agent knows nothing worked
+   - → on success return
+
+2. **JSON-LD / Open Graph parser** (v0.5.0)
+   - Parses `<script type="application/ld+json">` for Product / Article / NewsArticle schemas
+   - Falls back to `<meta property="og:*">` Open Graph tags
+   - Returns clean `{title, content, price, currency, image, author, datePublished}` when found
+   - Cheap (no headless browser), deterministic, wins on e-commerce + news + most modern sites
+
+3. **Jina Reader** with proper noise-stripping headers (v0.5.0)
+   - `X-Remove-Selector` strips nav/header/footer/banners
+   - `X-Target-Selector` focuses on article/main/product-detail
+   - Handles JS-rendered pages
+
+4. **`@mozilla/readability` + jsdom** (local extraction, no external dep)
+
+5. **All failed** → aggregated error so the agent knows nothing worked
 
 Disable extractors with `DISABLE_EXTRACTORS=1` (debugging / opt-out).
 
