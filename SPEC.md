@@ -12,11 +12,49 @@ A zero-cost, zero-key MCP server that gives Claude Code agents fresh web researc
 
 Both `search.js` and `fetch.js` shell out to `curl` (via `src/http.js`) instead of using Node's built-in `fetch` (undici). Empirically, on this machine, undici and `node:https` both time out at TCP-connect time on Cloudflare-fronted hosts (e.g. `r.jina.ai`, `example.com`) while curl reaches the very same IPs without issue. Rather than chase TLS fingerprinting or kernel TCP knobs, we shell out — curl is universally available, stable, and handles redirects/MTU/dual-stack better than any drop-in alternative we tried. Trade: ~50ms per call for process spawn, no big deal at agent-research volume. Tests inject `fetchImpl` so they remain offline-deterministic.
 
+## v0.2.0 — SQLite cache layer
+
+Transparent caching across all 3 original tools plus two new retrieval tools.
+
+**Storage:** Single SQLite database at `~/.research-mcp/cache.db` (override via `RESEARCH_MCP_DB_PATH` env). Auto-created on first run. Gitignored, not tracked by the tool's own repo.
+
+**TTL:** 24 hours by default. Override via `RESEARCH_MCP_CACHE_TTL_HOURS`. Setting to `0` disables caching (always miss). Setting to a large number (e.g. `8760` = 1 year) effectively pins results.
+
+**Cache key:** `SHA-256` of `tool_name + "\x00" + canonical_params` — for web_search uses `(query, num_results)`, for fetch_url uses `(url, max_chars)`, for search_and_read uses `(query, num_results, max_chars_per_result)`.
+
+**Behavior:**
+- On call: compute key, look up `searches` table. If row exists AND `(now - created_at) < ttl_ms` → return stored result, skip network.
+- Otherwise: invoke network, store result with `INSERT OR REPLACE`, return.
+- TTL check happens at read time, not eviction time — stale rows stay in DB indefinitely (cheap, helps "go back to that thing from last week" use case via `list_research`).
+
+**Schema:**
+
+| Column        | Type    | Notes                                            |
+|---------------|---------|--------------------------------------------------|
+| `id`          | INTEGER | PK autoincrement                                 |
+| `tool`        | TEXT    | `web_search` \| `fetch_url` \| `search_and_read` |
+| `cache_key`   | TEXT    | UNIQUE; SHA-256 hex of tool + params             |
+| `query`       | TEXT    | original query string or URL                     |
+| `params_json` | TEXT    | JSON of params (num_results, max_chars, etc.)    |
+| `result_json` | TEXT    | JSON of full tool response                       |
+| `created_at`  | INTEGER | unix ms                                          |
+
+Indices on `(created_at DESC)` and `(tool, created_at DESC)`.
+
+**Two new MCP tools:**
+
+- `list_research({ limit?: 1..100, tool_filter?: string })` → `{ entries: [{id, tool, query, age_hours, created_at_iso}] }`. Sorted newest first. No `result_json` in response — call `get_research` for full content.
+- `get_research({ id: integer })` → the stored `result_json` parsed back, plus `{tool, query, params, created_at_iso, age_hours}` metadata.
+
+**Non-cached:** errors are not cached. If a tool throws or returns `error` in any result, that response is *not* stored. Rationale: network blips shouldn't pollute the cache.
+
+**Migration:** Schema created via single `CREATE TABLE IF NOT EXISTS` at startup. No versioning yet (Tier 3 problem).
+
 ## Non-goals (deferred to Tier 2+)
 
 - Self-hosted search (SearXNG) — DuckDuckGo HTML scrape is enough for MVP.
 - Self-hosted extraction (Mozilla Readability + jsdom) — Jina Reader is free and good.
-- Caching — premature for MVP usage volume.
+- ~~Caching — premature for MVP volume.~~ Added in v0.2.0 (above).
 - Query expansion / reranking / site-specific extractors — Tier 3.
 
 ## Architecture
