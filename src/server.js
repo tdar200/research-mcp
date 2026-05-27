@@ -16,14 +16,18 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 
-import { duckDuckGoSearch } from './search.js';
-import { jinaFetch } from './fetch.js';
+import { webSearch } from './search.js';
+import { smartFetch } from './fetch.js';
 import { searchAndRead } from './combine.js';
 import { Cache } from './cache.js';
 
 const DB_PATH = process.env.RESEARCH_MCP_DB_PATH || join(homedir(), '.research-mcp', 'cache.db');
 const TTL_HOURS = Number(process.env.RESEARCH_MCP_CACHE_TTL_HOURS ?? 24);
 const TTL_MS = Number.isFinite(TTL_HOURS) && TTL_HOURS > 0 ? TTL_HOURS * 3600 * 1000 : 0;
+
+const SEARCH_BACKEND = process.env.SEARCH_BACKEND || 'auto';
+const SEARXNG_URL = process.env.SEARXNG_URL || 'http://localhost:8888';
+const DISABLE_EXTRACTORS = process.env.DISABLE_EXTRACTORS === '1';
 
 const cache = new Cache({ dbPath: DB_PATH });
 
@@ -128,7 +132,7 @@ const TOOLS = [
 ];
 
 const server = new Server(
-  { name: 'research-mcp', version: '0.2.0' },
+  { name: 'research-mcp', version: '0.3.0' },
   { capabilities: { tools: {} } }
 );
 
@@ -140,13 +144,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   try {
     if (name === 'web_search') {
       const { query, num_results } = WebSearchArgs.parse(args);
-      const results = await duckDuckGoSearch(query, num_results, { cache, ttlMs: TTL_MS });
+      const results = await webSearch(query, num_results, {
+        cache, ttlMs: TTL_MS,
+        backend: SEARCH_BACKEND,
+        searxngUrl: SEARXNG_URL,
+      });
       return { content: [{ type: 'text', text: JSON.stringify({ query, results }, null, 2) }] };
     }
 
     if (name === 'fetch_url') {
       const { url, max_chars } = FetchUrlArgs.parse(args);
-      const result = await jinaFetch(url, { maxChars: max_chars, cache, ttlMs: TTL_MS });
+      const result = await smartFetch(url, {
+        maxChars: max_chars,
+        cache, ttlMs: TTL_MS,
+        disableExtractors: DISABLE_EXTRACTORS,
+      });
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     }
 
@@ -157,6 +169,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         maxCharsPerResult: max_chars_per_result,
         cache,
         ttlMs: TTL_MS,
+        searchImpl: (q, n) => webSearch(q, n, { cache, ttlMs: TTL_MS, backend: SEARCH_BACKEND, searxngUrl: SEARXNG_URL }),
       });
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     }
@@ -198,4 +211,4 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
-process.stderr.write(`[research-mcp] v0.2.0 connected via stdio | db=${DB_PATH} | ttl=${TTL_HOURS}h\n`);
+process.stderr.write(`[research-mcp] v0.3.0 connected | db=${DB_PATH} | ttl=${TTL_HOURS}h | backend=${SEARCH_BACKEND} | searxng=${SEARXNG_URL} | extractors=${DISABLE_EXTRACTORS ? 'OFF' : 'ON'}\n`);
