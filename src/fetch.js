@@ -3,6 +3,7 @@ import { cacheKeyFor } from './cacheKey.js';
 import { findExtractor } from './extractorRegistry.js';
 import { readabilityFetch } from './readability.js';
 import { parseStructuredData } from './jsonld.js';
+import { crawl4aiFetch, isCrawl4aiReachable } from './crawl4ai.js';
 
 const JINA_BASE = 'https://r.jina.ai/';
 
@@ -111,9 +112,13 @@ export async function smartFetch(url, opts = {}) {
     ttlMs,
     fetchImpl,
     disableExtractors = false,
+    disableCrawl4ai = false,
+    crawl4aiBaseUrl,
     extractorImpl,
     jsonldImpl = defaultJsonldFetch,
     jinaImpl = jinaFetch,
+    crawl4aiImpl = crawl4aiFetch,
+    crawl4aiReachableImpl = isCrawl4aiReachable,
     readabilityImpl = readabilityFetch,
   } = opts;
 
@@ -154,6 +159,21 @@ export async function smartFetch(url, opts = {}) {
     if (!r.error && r.content) {
       if (cache && cacheKey) cache.set({ tool: 'fetch_url', cacheKey, query: url, params: { max_chars: maxChars }, result: r });
       return r;
+    }
+  }
+
+  // v0.6.0: Crawl4AI (only if reachable + not disabled)
+  if (!disableCrawl4ai) {
+    const reachable = await crawl4aiReachableImpl(crawl4aiBaseUrl || 'http://localhost:11235');
+    if (reachable) {
+      const r = await crawl4aiImpl(url, { maxChars, fetchImpl, baseUrl: crawl4aiBaseUrl });
+      attempts.push({ method: 'crawl4ai', error: r.error });
+      if (!r.error && r.content) {
+        if (cache && cacheKey) cache.set({ tool: 'fetch_url', cacheKey, query: url, params: { max_chars: maxChars }, result: r });
+        return r;
+      }
+    } else {
+      attempts.push({ method: 'crawl4ai', error: 'not reachable' });
     }
   }
 

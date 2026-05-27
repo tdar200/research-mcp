@@ -150,3 +150,48 @@ test('smartFetch caches JSON-LD result like any other strategy', async () => {
   assert.equal(fakeCache.set.mock.calls.length, 1);
   assert.equal(fakeCache.set.mock.calls[0].arguments[0].tool, 'fetch_url');
 });
+
+// ── v0.6.0: Crawl4AI integration ──────────────────────────────────────────
+
+test('smartFetch tries Crawl4AI between Jina and Readability when reachable', async () => {
+  const jinaImpl = mock.fn(async () => ({ url: 'u', content: null, error: 'jina failed' }));
+  const crawl4aiImpl = mock.fn(async () => ({ url: 'u', title: 'C4AI', content: 'crawl4ai body', truncated: false, extractor: 'crawl4ai' }));
+  const readabilityImpl = mock.fn(async () => { throw new Error('should not be called'); });
+  const jsonldImpl = mock.fn(async () => ({ url: 'u', content: null, error: 'no schema' }));
+  const reachableImpl = mock.fn(async () => true);
+
+  const result = await smartFetch('https://example.com', {
+    jsonldImpl, jinaImpl, crawl4aiImpl, readabilityImpl, crawl4aiReachableImpl: reachableImpl,
+  });
+  assert.equal(result.content, 'crawl4ai body');
+});
+
+test('smartFetch skips Crawl4AI when not reachable', async () => {
+  const jinaImpl = mock.fn(async () => ({ url: 'u', content: null, error: 'jina failed' }));
+  const crawl4aiImpl = mock.fn(async () => { throw new Error('should not be called'); });
+  const readabilityImpl = mock.fn(async () => ({ url: 'u', content: 'readability body', truncated: false }));
+  const jsonldImpl = mock.fn(async () => ({ url: 'u', content: null, error: 'no schema' }));
+  const reachableImpl = mock.fn(async () => false);
+
+  const result = await smartFetch('https://example.com', {
+    jsonldImpl, jinaImpl, crawl4aiImpl, readabilityImpl, crawl4aiReachableImpl: reachableImpl,
+  });
+  assert.equal(result.content, 'readability body');
+  assert.equal(crawl4aiImpl.mock.calls.length, 0);
+});
+
+test('smartFetch skips Crawl4AI when disableCrawl4ai=true', async () => {
+  const jinaImpl = mock.fn(async () => ({ url: 'u', content: null, error: 'jina failed' }));
+  const crawl4aiImpl = mock.fn(async () => { throw new Error('should not be called'); });
+  const readabilityImpl = mock.fn(async () => ({ url: 'u', content: 'readability body', truncated: false }));
+  const reachableImpl = mock.fn(async () => true);
+
+  const result = await smartFetch('https://example.com', {
+    jinaImpl, crawl4aiImpl, readabilityImpl,
+    crawl4aiReachableImpl: reachableImpl,
+    disableCrawl4ai: true,
+    jsonldImpl: mock.fn(async () => ({ url: 'u', content: null, error: 'no schema' })),
+  });
+  assert.equal(result.content, 'readability body');
+  assert.equal(crawl4aiImpl.mock.calls.length, 0);
+});

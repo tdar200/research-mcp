@@ -28,6 +28,8 @@ const TTL_MS = Number.isFinite(TTL_HOURS) && TTL_HOURS > 0 ? TTL_HOURS * 3600 * 
 const SEARCH_BACKEND = process.env.SEARCH_BACKEND || 'auto';
 const SEARXNG_URL = process.env.SEARXNG_URL || 'http://localhost:8888';
 const DISABLE_EXTRACTORS = process.env.DISABLE_EXTRACTORS === '1';
+const CRAWL4AI_URL = process.env.CRAWL4AI_URL || 'http://localhost:11235';
+const DISABLE_CRAWL4AI = process.env.DISABLE_CRAWL4AI === '1';
 
 const cache = new Cache({ dbPath: DB_PATH });
 
@@ -162,7 +164,7 @@ const TOOLS = [
 ];
 
 const server = new Server(
-  { name: 'research-mcp', version: '0.5.0' },
+  { name: 'research-mcp', version: '0.6.0' },
   { capabilities: { tools: {} } }
 );
 
@@ -190,6 +192,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         maxChars: max_chars,
         cache, ttlMs: TTL_MS,
         disableExtractors: DISABLE_EXTRACTORS,
+        disableCrawl4ai: DISABLE_CRAWL4AI,
+        crawl4aiBaseUrl: CRAWL4AI_URL,
       });
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     }
@@ -249,4 +253,4 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
-process.stderr.write(`[research-mcp] v0.5.0 connected | db=${DB_PATH} | ttl=${TTL_HOURS}h | backend=${SEARCH_BACKEND} | searxng=${SEARXNG_URL} | extractors=${DISABLE_EXTRACTORS ? 'OFF' : 'ON'}\n`);
+process.stderr.write(`[research-mcp] v0.6.0 connected | db=${DB_PATH} | ttl=${TTL_HOURS}h | backend=${SEARCH_BACKEND} | searxng=${SEARXNG_URL} | crawl4ai=${CRAWL4AI_URL}${DISABLE_CRAWL4AI ? ' (DISABLED)' : ''} | extractors=${DISABLE_EXTRACTORS ? 'OFF' : 'ON'}\n`);
