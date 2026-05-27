@@ -22,3 +22,18 @@ services:
       options:
         max-size: "1m"
         max-file: "1"
+
+  crawl4ai:
+    image: unclecode/crawl4ai:latest
+    container_name: research-mcp-crawl4ai
+    restart: unless-stopped
+    ports:
+      - "11235:11235"
+    shm_size: "3gb"
+    environment:
+      - INSTALL_TYPE=basic
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"

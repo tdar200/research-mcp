@@ -147,6 +147,38 @@ Result: dramatically less noise on e-commerce and marketing pages where header/n
 6. Aggregated error
 ```
 
+## v0.6.0 — Crawl4AI standalone Docker service
+
+Adds [Crawl4AI](https://github.com/unclecode/crawl4ai) (66k+ ⭐, Apache 2.0) as a standalone Docker service on `localhost:11235`, accessed via its REST API. Used as the 5th-tier fallback in `smartFetch` — after Jina, before Mozilla Readability — for JS-heavy SPAs and anti-bot-protected pages.
+
+**Why a separate service, not bundled into our MCP:** Crawl4AI on port 11235 is generally useful beyond MCP context — any CLI script, agent, or other app can call its REST API. Same pattern as SearXNG already follows. Keeps research-mcp as the smart router; Crawl4AI is one of the engines.
+
+**Resource cost:** min 1GB RAM, recommended 4GB. Disk +500MB (Chromium binaries). Cold-start adds ~2-3s to first request; warm browser pool keeps subsequent requests fast.
+
+**Configuration:**
+
+- `CRAWL4AI_URL` — base URL (default `http://localhost:11235`)
+- `DISABLE_CRAWL4AI=1` — skip Crawl4AI in smartFetch even if reachable
+
+**Setup:**
+
+```bash
+cd ~/Projects/research-mcp
+docker compose up -d crawl4ai
+curl http://localhost:11235/health    # verify
+```
+
+**smartFetch cascade (final):**
+
+```
+1. Cache check
+2. URL-pattern extractor (GitHub/NPM/SO/MDN)
+3. JSON-LD / Open Graph parser
+4. Jina Reader (with stripping headers)
+5. ★ Crawl4AI (if reachable, JS rendering + anti-bot)
+6. Mozilla Readability fallback
+```
+
 ## Non-goals (deferred to Tier 2+)
 
 - Self-hosted search (SearXNG) — DuckDuckGo HTML scrape is enough for MVP.
