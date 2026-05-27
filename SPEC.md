@@ -111,6 +111,42 @@ Both map to native parameters of the underlying search backend — SearXNG `time
 - `search_and_read(query="restaurant POS funding", source="news", time_range="month")` — recent industry news
 - `search_and_read(query="POS architecture", source="hackernews")` — technical discussion
 
+## v0.5.0 — JSON-LD/Open Graph extractor + Jina header improvements
+
+Two complementary content-extraction upgrades:
+
+### JSON-LD / Open Graph parser (`src/jsonld.js`)
+
+A new extractor that runs **before** Jina Reader in `smartFetch`. Parses the raw HTML for two universally-embedded sources of structured page data:
+
+1. **`<script type="application/ld+json">`** — Schema.org structured data (Product, Article, NewsArticle, etc.). Used by ~80% of e-commerce and news sites globally for SEO.
+2. **`<meta property="og:*">`** — Open Graph tags (`og:title`, `og:description`, `og:image`, `og:price:amount`, `og:price:currency`).
+
+Output shape: `{url, title, content, truncated, price?, currency?, image?, author?, datePublished?, schemaType?, extractor: 'jsonld'}`. Returns `{content: null, error: 'no structured data found'}` if neither source has useful data — `smartFetch` falls through to next stage.
+
+**Why this matters:** solves the "extracting product prices buried under nav chrome" problem (Vmart.pk, Daraz, etc.) deterministically — no heuristics, no LLM, just `JSON.parse()`. Tonight's WD Elements 4TB price was extractable in 100ms via this approach when 30,000 chars of Jina output couldn't surface it.
+
+### Jina Reader header improvements (`src/fetch.js`)
+
+`jinaFetch` now sends these HTTP headers to Jina's API by default:
+
+- `X-Remove-Selector: header, nav, footer, .announcement, .announcement-bar, .popup, .cookie-banner, .modal, [class*="banner"]` — strips noise before extraction
+- `X-Target-Selector: article, main, [itemtype], .product-detail, .post-content, .markdown-body` — focuses extraction on likely-main-content selectors
+- `X-Return-Format: markdown` (explicit)
+
+Result: dramatically less noise on e-commerce and marketing pages where header/nav/banner dominates DOM order.
+
+### Updated smartFetch cascade
+
+```
+1. Cache check
+2. URL-pattern extractor (GitHub/NPM/SO/MDN)
+3. ★ NEW: JSON-LD / Open Graph parser
+4. Jina Reader (with new headers)
+5. Mozilla Readability fallback
+6. Aggregated error
+```
+
 ## Non-goals (deferred to Tier 2+)
 
 - Self-hosted search (SearXNG) — DuckDuckGo HTML scrape is enough for MVP.
