@@ -1,81 +1,114 @@
 # research-mcp
 
-Zero-cost, zero-key MCP server giving Claude Code agents fresh web research via DuckDuckGo search + [Jina Reader](https://jina.ai/reader/) extraction, with **transparent SQLite caching** so prior results are instant and recoverable.
+Zero-cost MCP server giving Claude Code agents fresh web research via meta-search (SearXNG or DDG) + multi-strategy content extraction (site-specific extractors → Jina Reader → Mozilla Readability), with transparent SQLite caching.
 
 ## Tools
 
 | Tool | Use when |
 |------|----------|
-| `web_search(query, num_results=5)` | You just need URLs — no content extraction. |
-| `fetch_url(url, max_chars=20000)` | You already have a URL and want clean markdown. |
+| `web_search(query, num_results=5)` | You just need URLs — no content. |
+| `fetch_url(url, max_chars=20000)` | You have a URL and want clean markdown content. |
 | `search_and_read(query, num_results=3, max_chars_per_result=8000)` | **Default research call** — top-N results + their content in one shot. |
-| `list_research(limit=20, tool_filter?)` | Browse what's already cached. Free, instant. Call before searching to check for prior runs. |
+| `list_research(limit=20, tool_filter?)` | Browse what's already cached. Free, instant. |
 | `get_research(id)` | Pull full cached content by id (from `list_research`). Zero network. |
 
-## Caching
+## v0.3.0 architecture (Tier 2 + Tier 3c)
 
-All 3 of the search/fetch tools transparently cache to SQLite at `~/.research-mcp/cache.db` (override via `RESEARCH_MCP_DB_PATH`). Default TTL is **24 hours**.
+### Search backend selection
 
-Tune via env:
+- **SearXNG** (Docker, `localhost:8888`) — meta-searches Google/Bing/Brave/DDG/etc., returns JSON. Default if reachable.
+- **DuckDuckGo HTML** — built-in fallback when SearXNG is unreachable. Zero infra mode.
+- Selection via `SEARCH_BACKEND` env: `auto` (default; probes SearXNG, falls back to DDG), `searxng` (force), `ddg` (force).
 
-- `RESEARCH_MCP_CACHE_TTL_HOURS=8760` — cache for 1 year (effectively pin)
-- `RESEARCH_MCP_CACHE_TTL_HOURS=0` — disable caching (always fetch fresh)
+### Content extraction strategy (per URL)
 
-Errors and empty results are NOT cached — only successful responses are stored.
+`fetch_url` and `search_and_read` internally use `smartFetch`:
 
-## Requirements
+1. **URL matches registered pattern?**
+   - `github.com/X/Y` → GitHub API (repo README + metadata)
+   - `github.com/X/Y/issues/N` or `/pull/N` → GitHub API (issue + top comments)
+   - `npmjs.com/package/X` → npm registry (package metadata + README)
+   - `stackoverflow.com/questions/N` → Stack Exchange API (Q + top 3 answers)
+   - `developer.mozilla.org/...` → MDN cheerio (.main-page-content)
+   - → YES: try it; on success return
+2. **Fall through to Jina Reader** (handles JS-rendered pages)
+3. **Fall through to `@mozilla/readability` + jsdom** (local extraction, no external dep)
+4. **All three failed** → aggregated error so the agent knows nothing worked
 
-- Node.js ≥ 20
-- `curl` on `$PATH` (HTTP backend — see [SPEC.md](./SPEC.md) for why)
-- C toolchain for `better-sqlite3` native build (`python3` + `make`; both default on Ubuntu)
+Disable extractors with `DISABLE_EXTRACTORS=1` (debugging / opt-out).
 
-## Install
+## Setup
 
-Already done if this lives in `~/Projects/research-mcp/`. To register globally:
+### One-time: start SearXNG
 
 ```bash
-claude mcp add -s user research-mcp -- node /home/tahseen-dar/Projects/research-mcp/src/server.js
+cd ~/Projects/research-mcp
+docker compose up -d searxng
 ```
 
-Verify:
+Verify: `curl http://localhost:8888/healthz` → 200.
+
+Stop with `docker compose down`. Logs: `docker compose logs -f searxng`.
+
+### Register with Claude Code (one-time, at user scope)
 
 ```bash
-claude mcp list | grep research-mcp
+claude mcp add -s user research-mcp -- node ~/Projects/research-mcp/src/server.js
 ```
 
-Should show `✓ Connected`.
+Verify: `claude mcp list | grep research-mcp` → `✓ Connected`.
+
+## Environment variables
+
+| Env | Default | Effect |
+|-----|---------|--------|
+| `RESEARCH_MCP_DB_PATH` | `~/.research-mcp/cache.db` | SQLite cache location |
+| `RESEARCH_MCP_CACHE_TTL_HOURS` | `24` | Cache TTL; `0` disables caching |
+| `SEARCH_BACKEND` | `auto` | `auto` / `searxng` / `ddg` |
+| `SEARXNG_URL` | `http://localhost:8888` | SearXNG base URL |
+| `DISABLE_EXTRACTORS` | unset | Set to `1` to skip site-specific extractors |
+| `GITHUB_TOKEN` | unset | Optional; raises GitHub API limit 60/hr → 5000/hr |
 
 ## Tests
 
 ```bash
-npm test                       # offline unit tests (38 tests)
-npm run test:integration       # real network — only for end-to-end validation
-node scripts/smoke-cache.js    # validates the cache layer round-trips
+npm test                          # offline unit tests (103 tests)
+npm run test:integration          # real network — end-to-end validation
+node scripts/smoke-cache.js       # cache round-trip
+node scripts/smoke-searxng.js     # SearXNG end-to-end
+node scripts/smoke-extractors.js  # all 4 extractors + Jina fallback
 ```
 
-## Architecture
+## Architecture / files
 
-See [SPEC.md](./SPEC.md). Modules:
+```
+src/
+├── server.js              # MCP protocol wiring, env config
+├── search.js              # webSearch router; parseDuckDuckGoHtml; duckDuckGoSearch
+├── searxng.js             # SearXNG JSON API client + reachability probe
+├── fetch.js               # smartFetch router; jinaFetch (kept exported)
+├── readability.js         # Mozilla Readability + jsdom fallback
+├── extractorRegistry.js   # URL pattern → extractor lookup
+├── extractors/
+│   ├── github.js          # api.github.com (README, issues, PRs)
+│   ├── npm.js             # registry.npmjs.org
+│   ├── stackoverflow.js   # api.stackexchange.com
+│   └── mdn.js             # cheerio scrape of MDN .main-page-content
+├── combine.js             # search_and_read composer
+├── cache.js               # SQLite cache (better-sqlite3)
+├── cacheKey.js            # SHA-256 cache key builder
+└── http.js                # curl-backed HTTP (see SPEC.md for why)
+```
 
-- `src/search.js` — DDG HTML parser (cheerio) + cached search
-- `src/fetch.js` — Jina Reader wrapper + cached fetch
-- `src/combine.js` — `search_and_read` composer + combined-result cache
-- `src/cache.js` — SQLite wrapper (`better-sqlite3`)
-- `src/cacheKey.js` — deterministic cache key from tool + params
-- `src/http.js` — curl-backed HTTP (see SPEC for why)
-- `src/server.js` — MCP protocol wiring, env → cache config
+## Requirements
+
+- Node.js ≥ 20
+- `curl` on PATH
+- Docker (for SearXNG; optional — falls back to DDG without it)
+- C toolchain for `better-sqlite3` native build (`python3` + `make`)
 
 ## Maintenance
 
-If `web_search` starts returning empty arrays, the DDG markup has changed. Refresh the fixture:
-
-```bash
-curl -sS -A "Mozilla/5.0" --data-urlencode "q=test" "https://html.duckduckgo.com/html/" > test/fixtures/ddg-results.html
-npm test
-```
-
-To wipe the cache:
-
-```bash
-rm ~/.research-mcp/cache.db
-```
+- If `web_search` returns empty arrays from DDG fallback, DDG markup changed: refresh `test/fixtures/ddg-results.html` and update parser.
+- If SearXNG returns no results, check `docker compose logs searxng` — usually upstream engine rate limit; restart container.
+- To wipe cache: `rm ~/.research-mcp/cache.db`.
