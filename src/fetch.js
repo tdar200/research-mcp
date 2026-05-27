@@ -2,6 +2,7 @@ import { curlFetch } from './http.js';
 import { cacheKeyFor } from './cacheKey.js';
 import { findExtractor } from './extractorRegistry.js';
 import { readabilityFetch } from './readability.js';
+import { parseStructuredData } from './jsonld.js';
 
 const JINA_BASE = 'https://r.jina.ai/';
 
@@ -111,6 +112,7 @@ export async function smartFetch(url, opts = {}) {
     fetchImpl,
     disableExtractors = false,
     extractorImpl,
+    jsonldImpl = defaultJsonldFetch,
     jinaImpl = jinaFetch,
     readabilityImpl = readabilityFetch,
   } = opts;
@@ -136,6 +138,16 @@ export async function smartFetch(url, opts = {}) {
     }
   }
 
+  // v0.5.0: JSON-LD / Open Graph parser
+  {
+    const r = await jsonldImpl(url, { maxChars, fetchImpl });
+    attempts.push({ method: 'jsonld', error: r.error });
+    if (!r.error && r.content) {
+      if (cache && cacheKey) cache.set({ tool: 'fetch_url', cacheKey, query: url, params: { max_chars: maxChars }, result: r });
+      return r;
+    }
+  }
+
   {
     const r = await jinaImpl(url, { maxChars, fetchImpl });
     attempts.push({ method: 'jina', error: r.error });
@@ -158,4 +170,22 @@ export async function smartFetch(url, opts = {}) {
     url, title: null, content: null, truncated: false,
     error: `all strategies failed: ${attempts.map(a => `${a.method}=${a.error || 'no content'}`).join('; ')}`,
   };
+}
+
+/** Default jsonldImpl: fetches HTML via curl, then parses for JSON-LD/OG. */
+async function defaultJsonldFetch(url, opts = {}) {
+  const { fetchImpl = curlFetch } = opts;
+  try {
+    const res = await fetchImpl(url, {
+      timeoutMs: 15000,
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; research-mcp/0.5.0)' },
+    });
+    if (!res.ok) {
+      return { url, title: null, content: null, truncated: false, error: `${res.status} ${res.statusText}` };
+    }
+    const html = await res.text();
+    return parseStructuredData(html, url);
+  } catch (err) {
+    return { url, title: null, content: null, truncated: false, error: String(err.message || err) };
+  }
 }

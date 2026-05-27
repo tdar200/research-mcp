@@ -115,3 +115,38 @@ test('smartFetch does NOT cache when all strategies fail', async () => {
   });
   assert.equal(fakeCache.set.mock.calls.length, 0);
 });
+
+// ── v0.5.0: JSON-LD integration ──────────────────────────────────────────
+
+test('smartFetch tries JSON-LD parser between extractor and Jina', async () => {
+  const extractorImpl = { name: 'fake', extract: mock.fn(async () => ({ url: 'u', content: null, error: 'no match' })) };
+  const jsonldImpl = mock.fn(async () => ({ url: 'u', title: 'JSON-LD title', content: 'JSON-LD body', truncated: false, schemaType: 'Product', extractor: 'jsonld' }));
+  const jinaImpl = mock.fn(async () => { throw new Error('should not be called'); });
+  const readabilityImpl = mock.fn(async () => { throw new Error('should not be called'); });
+
+  const result = await smartFetch('https://example.com/p', {
+    extractorImpl, jsonldImpl, jinaImpl, readabilityImpl,
+  });
+  assert.equal(result.content, 'JSON-LD body');
+  assert.equal(result.schemaType, 'Product');
+});
+
+test('smartFetch falls through to Jina when JSON-LD returns no data', async () => {
+  const jsonldImpl = mock.fn(async () => ({ url: 'u', content: null, error: 'no structured data found' }));
+  const jinaImpl = mock.fn(async () => ({ url: 'u', title: 'Jina', content: 'Jina body', truncated: false }));
+  const readabilityImpl = mock.fn(async () => { throw new Error('should not be called'); });
+
+  const result = await smartFetch('https://example.com/p', { jsonldImpl, jinaImpl, readabilityImpl });
+  assert.equal(result.content, 'Jina body');
+  assert.equal(jsonldImpl.mock.calls.length, 1);
+  assert.equal(jinaImpl.mock.calls.length, 1);
+});
+
+test('smartFetch caches JSON-LD result like any other strategy', async () => {
+  const fakeCache = { get: mock.fn(() => null), set: mock.fn() };
+  const jsonldImpl = mock.fn(async () => ({ url: 'u', title: 'T', content: 'body', truncated: false }));
+
+  await smartFetch('https://example.com/p', { jsonldImpl, cache: fakeCache, ttlMs: 60_000 });
+  assert.equal(fakeCache.set.mock.calls.length, 1);
+  assert.equal(fakeCache.set.mock.calls[0].arguments[0].tool, 'fetch_url');
+});
