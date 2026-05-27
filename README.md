@@ -6,11 +6,25 @@ Zero-cost MCP server giving Claude Code agents fresh web research via meta-searc
 
 | Tool | Use when |
 |------|----------|
-| `web_search(query, num_results=5)` | You just need URLs — no content. |
+| `web_search(query, num_results=5, source?, time_range?)` | You just need URLs — no content. |
 | `fetch_url(url, max_chars=20000)` | You have a URL and want clean markdown content. |
-| `search_and_read(query, num_results=3, max_chars_per_result=8000)` | **Default research call** — top-N results + their content in one shot. |
+| `search_and_read(query, num_results=3, max_chars_per_result=8000, source?, time_range?)` | **Default research call** — top-N results + their content in one shot. |
 | `list_research(limit=20, tool_filter?)` | Browse what's already cached. Free, instant. |
 | `get_research(id)` | Pull full cached content by id (from `list_research`). Zero network. |
+
+### Source + time_range filters (v0.4.0)
+
+Both `web_search` and `search_and_read` accept:
+
+- **`source`**: `web` (default), `news`, `reddit`, `hackernews`. Filters to that origin. Cuts SEO comparison-site noise; surfaces authentic discussion (reddit) or recent industry news.
+- **`time_range`**: `all` (default), `day`, `week`, `month`, `year`. Filters by recency.
+
+Examples worth committing to muscle memory:
+- `search_and_read("Foodhub pricing", source="reddit", time_range="year")` — real recent restaurant-owner discussion
+- `search_and_read("Toast Q4 earnings", source="news", time_range="month")` — fresh industry news
+- `search_and_read("better-sqlite3 perf", source="hackernews")` — technical-community take
+
+**Known limitation:** SearXNG's `reddit` and `hackernews` engines have weak full-text search for niche queries — they may return irrelevant recent posts. For better reddit-quality results on niche topics, force the DDG backend (`SEARCH_BACKEND=ddg`) which uses `site:reddit.com` instead.
 
 ## v0.3.0 architecture (Tier 2 + Tier 3c)
 
