@@ -35,22 +35,26 @@ test('smartFetch falls back to readability if extractor + jina both fail', async
     name: 'fake',
     extract: mock.fn(async () => ({ url: 'u', content: null, error: 'ex fail' })),
   };
+  const jsonldImpl = mock.fn(async () => ({ url: 'u', content: null, error: 'no schema' }));
   const jinaImpl = mock.fn(async () => ({ url: 'u', content: null, error: 'jina fail' }));
   const readabilityImpl = mock.fn(async () => ({ url: 'u', title: 'R', content: 'readability body', truncated: false }));
 
   const result = await smartFetch('https://github.com/a/b', {
-    extractorImpl, jinaImpl, readabilityImpl,
+    extractorImpl, jsonldImpl, jinaImpl, readabilityImpl,
+    disableCrawl4ai: true,
   });
   assert.equal(result.content, 'readability body');
 });
 
 test('smartFetch returns aggregated error when all three fail', async () => {
   const extractorImpl = { name: 'fake', extract: mock.fn(async () => ({ url: 'u', content: null, error: 'ex fail' })) };
+  const jsonldImpl = mock.fn(async () => ({ url: 'u', content: null, error: 'no schema' }));
   const jinaImpl = mock.fn(async () => ({ url: 'u', content: null, error: 'jina fail' }));
   const readabilityImpl = mock.fn(async () => ({ url: 'u', content: null, error: 'read fail' }));
 
   const result = await smartFetch('https://github.com/a/b', {
-    extractorImpl, jinaImpl, readabilityImpl,
+    extractorImpl, jsonldImpl, jinaImpl, readabilityImpl,
+    disableCrawl4ai: true,
   });
   assert.equal(result.content, null);
   assert.match(result.error, /ex fail/);
