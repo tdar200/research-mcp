@@ -88,6 +88,29 @@ Unchanged from v0.2.0. Same `(tool, params)` cache key regardless of which backe
 - **Tier 3a** (query expansion via Claude) — deferred. Open question: can the MCP server reuse Claude Code's session credentials (MCP sampling protocol) instead of needing a separate Anthropic API key?
 - **Tier 3b** (semantic reranking via Cohere) — deferred until Cohere key is added.
 
+## v0.4.0 — Source + time range filters
+
+Adds two parameters to `web_search` and `search_and_read` (NOT `fetch_url` — it takes a URL, not a query):
+
+**`source`** — restrict to a specific origin. Default `web`.
+- `web` — open web (existing behavior)
+- `news` — news sources (Google News, Bing News etc. via SearXNG `categories=news`; major news `site:` filters via DDG)
+- `reddit` — Reddit only (SearXNG `engines=reddit`; DDG `site:reddit.com`)
+- `hackernews` — Hacker News (SearXNG `engines=hackernews`; DDG `site:news.ycombinator.com`)
+
+**`time_range`** — recency filter. Default `all`.
+- `all` — no filter (existing behavior)
+- `day` / `week` / `month` / `year` — restrict to results from that recent window
+
+Both map to native parameters of the underlying search backend — SearXNG `time_range=` and `categories=`/`engines=`; DDG `df=` and `site:` operator.
+
+**Cache key impact:** Includes both params. Querying the same topic with different source/time gives different cache entries.
+
+**Use cases:**
+- `search_and_read(query="Foodhub pricing", source="reddit", time_range="year")` — find real restaurant-owner discussion from the past year only, no SEO comparison sites
+- `search_and_read(query="restaurant POS funding", source="news", time_range="month")` — recent industry news
+- `search_and_read(query="POS architecture", source="hackernews")` — technical discussion
+
 ## Non-goals (deferred to Tier 2+)
 
 - Self-hosted search (SearXNG) — DuckDuckGo HTML scrape is enough for MVP.
