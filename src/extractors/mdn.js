@@ -1,5 +1,6 @@
 import { load } from 'cheerio';
 import { curlFetch } from '../http.js';
+import { truncateAtBoundary } from '../truncate.js';
 
 /**
  * Fetch an MDN page directly and extract `.main-page-content` (or `<main>` fallback)
@@ -40,11 +41,11 @@ export async function mdnExtractor(url, opts = {}) {
     $main.find('.notecard, .ix, .interactive-example, nav, aside, .langlist, .last-modified-date').remove();
 
     const raw = $main.text().replace(/\s+/g, ' ').trim();
-    const truncated = raw.length > maxChars;
+    const { content, truncated } = truncateAtBoundary(raw, maxChars);
     return {
       url,
       title,
-      content: truncated ? raw.slice(0, maxChars) : raw,
+      content,
       truncated,
       extractor: 'mdn',
     };

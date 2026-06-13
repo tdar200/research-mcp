@@ -1,4 +1,5 @@
 import { curlFetch } from './http.js';
+import { truncateAtBoundary } from './truncate.js';
 
 const DEFAULT_BASE_URL = 'http://localhost:11235';
 
@@ -72,11 +73,14 @@ export async function crawl4aiFetch(url, opts = {}) {
     const md = typeof mdField === 'string'
       ? mdField
       : (mdField?.fit_markdown || mdField?.raw_markdown || '');
-    const truncated = md.length > maxChars;
+    const { content, truncated } = truncateAtBoundary(md, maxChars);
     return {
       url,
+      // The final URL the headless browser navigated to — a reliable identity
+      // signal even when curl's effective URL isn't available (browser, not curl).
+      landedUrl: first.url || null,
       title: first.metadata?.title || null,
-      content: truncated ? md.slice(0, maxChars) : md,
+      content,
       truncated,
       extractor: 'crawl4ai',
     };

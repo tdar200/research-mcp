@@ -1,4 +1,5 @@
 import { curlFetch } from '../http.js';
+import { truncateAtBoundary } from '../truncate.js';
 
 const API_BASE = 'https://api.github.com';
 
@@ -81,11 +82,11 @@ async function fetchRepoReadme({ fetchImpl, headers, url, owner, repo, maxChars 
   ].join('\n');
 
   const full = header + readmeText;
-  const truncated = full.length > maxChars;
+  const { content, truncated } = truncateAtBoundary(full, maxChars);
   return {
     url,
     title: repoInfo.full_name || `${owner}/${repo}`,
-    content: truncated ? full.slice(0, maxChars) : full,
+    content,
     truncated,
     extractor: 'github',
   };
@@ -116,11 +117,11 @@ async function fetchIssue({ fetchImpl, headers, url, owner, repo, number, maxCha
   }
 
   const md = lines.join('\n');
-  const truncated = md.length > maxChars;
+  const { content, truncated } = truncateAtBoundary(md, maxChars);
   return {
     url,
     title: issue.title,
-    content: truncated ? md.slice(0, maxChars) : md,
+    content,
     truncated,
     extractor: 'github',
   };

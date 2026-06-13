@@ -1,6 +1,6 @@
 # research-mcp
 
-Zero-cost MCP server giving Claude Code agents fresh web research via meta-search (SearXNG or DDG) + multi-strategy content extraction (site-specific extractors → Jina Reader → Mozilla Readability), with transparent SQLite caching.
+Zero-cost MCP server giving Claude Code agents fresh web research via meta-search (SearXNG or DDG) + multi-strategy content extraction (site-specific extractors → JSON-LD → Jina Reader → Crawl4AI → Mozilla Readability), with transparent SQLite caching, SSRF protection, and untrusted-content fencing.
 
 ## Tools
 
@@ -68,6 +68,18 @@ Examples worth committing to muscle memory:
 
 Disable extractors with `DISABLE_EXTRACTORS=1` (debugging / opt-out).
 
+## v0.7.0 — reliability + security
+
+Cross-cutting hardening on top of the v0.3–v0.6 pipeline:
+
+- **SSRF protection** — `fetch_url` validates every target (and every redirect hop) against a private/loopback/link-local/cloud-metadata blocklist, pinning the validated IP into `curl` (`--resolve`) to defeat DNS rebinding. Internal SearXNG/Crawl4AI calls are unaffected. Escape hatch: `RESEARCH_MCP_ALLOW_PRIVATE=1`.
+- **Untrusted-content fencing** — fetched `content` is wrapped in `[BEGIN/END UNTRUSTED WEB CONTENT]` markers warning the model not to obey instructions inside it (indirect prompt-injection mitigation). Disable with `DISABLE_UNTRUSTED_WRAP=1`.
+- **Content cleaning** — conservative, line-based stripping of ad/promo/nav chrome ("Promoted" cards, "Skip to main content", login/cookie lines) from extracted markdown. Disable with `DISABLE_CONTENT_CLEAN=1`.
+- **Observability** — every fetch result carries `strategy` (which stage won: `jsonld`/`jina`/`crawl4ai`/`readability`/extractor name/`cache`) and `elapsed_ms`. A mismatch between the requested and landed URL surfaces as `urlMismatch`.
+- **Search reliability** — empty searches return an explanatory `note` instead of a silent `[]`; the search-results cache is unified across `web_search`/`search_and_read` (keyed on query+source+time_range, independent of `num_results`) so the two tools stop double-spending on the same query.
+- **Fetch robustness** — per-URL deadline + bounded concurrency in `search_and_read`; one retry with jittered backoff on Jina `429`/`503`; boundary-aware truncation (no mid-word cuts).
+- **Cache policy** — per-query-class TTLs (volatile news expires fast, doc/code hosts live long) and age/row-cap eviction so the DB no longer grows unbounded.
+
 ## Setup
 
 ### One-time: start SearXNG
@@ -109,18 +121,25 @@ Verify: `claude mcp list | grep research-mcp` → `✓ Connected`.
 | Env | Default | Effect |
 |-----|---------|--------|
 | `RESEARCH_MCP_DB_PATH` | `~/.research-mcp/cache.db` | SQLite cache location |
-| `RESEARCH_MCP_CACHE_TTL_HOURS` | `24` | Cache TTL; `0` disables caching |
+| `RESEARCH_MCP_CACHE_TTL_HOURS` | `24` | **Base** cache TTL; multiplied per query class (news/recent ÷24, docs ×7, doc-hosts/PDF ×30). `0` disables caching |
+| `RESEARCH_MCP_CACHE_MAX_ROWS` | `5000` | Cache row cap (oldest evicted opportunistically). `0` = uncapped |
+| `RESEARCH_MCP_CACHE_MAX_AGE_DAYS` | `30` | Age-based cache eviction (floored to the longest class TTL) |
 | `SEARCH_BACKEND` | `auto` | `auto` / `searxng` / `ddg` |
 | `SEARXNG_URL` | `http://localhost:8888` | SearXNG base URL |
 | `DISABLE_EXTRACTORS` | unset | Set to `1` to skip site-specific extractors |
 | `GITHUB_TOKEN` | unset | Optional; raises GitHub API limit 60/hr → 5000/hr |
 | `CRAWL4AI_URL` | `http://localhost:11235` | Crawl4AI service URL |
 | `DISABLE_CRAWL4AI` | unset | Set to `1` to skip Crawl4AI in smartFetch cascade |
+| `RESEARCH_MCP_FETCH_TIMEOUT_MS` | `10000` | Per-URL deadline in `search_and_read` (a slow page degrades to `error:'fetch timeout'`) |
+| `RESEARCH_MCP_FETCH_CONCURRENCY` | `4` | Max simultaneous fetches during `search_and_read` fan-out |
+| `RESEARCH_MCP_ALLOW_PRIVATE` | unset | Set to `1` to **disable** SSRF protection (allow private/loopback/metadata URLs) |
+| `DISABLE_UNTRUSTED_WRAP` | unset | Set to `1` to disable fencing fetched `content` as untrusted |
+| `DISABLE_CONTENT_CLEAN` | unset | Set to `1` to disable ad/nav boilerplate stripping |
 
 ## Tests
 
 ```bash
-npm test                          # offline unit tests (103 tests)
+npm test                          # offline unit tests (265 tests)
 npm run test:integration          # real network — end-to-end validation
 node scripts/smoke-cache.js       # cache round-trip
 node scripts/smoke-searxng.js     # SearXNG end-to-end

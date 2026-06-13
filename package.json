@@ -1,7 +1,7 @@
 {
   "name": "research-mcp",
-  "version": "0.6.0",
-  "description": "MCP server: SearXNG/DDG search + Jina/Readability extraction + site-specific extractors for Claude agents",
+  "version": "0.7.0",
+  "description": "MCP server: SearXNG/DDG search + Jina/Readability/Crawl4AI extraction + site-specific extractors for Claude agents, with SSRF protection, untrusted-content fencing, and per-source cache TTLs",
   "type": "module",
   "main": "src/server.js",
   "bin": {

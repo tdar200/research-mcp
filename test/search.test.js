@@ -37,8 +37,11 @@ test('parseDuckDuckGoHtml returns [] on empty html', () => {
 test('duckDuckGoSearch returns cached results when cache hit (no network call)', async () => {
   const fakeFetch = mock.fn(async () => { throw new Error('should not be called'); });
   const fakeCache = {
+    // Realistic cached entry: real writes always store params.num_results, which
+    // readSearchCache uses to honor "engine was asked for >= want" (authoritative).
     get: mock.fn(() => ({
       result: [{ title: 'Cached', url: 'https://cached.example', snippet: 'from cache' }],
+      params: { num_results: 3, source: 'web', time_range: 'all' },
     })),
     set: mock.fn(),
   };
@@ -131,6 +134,36 @@ test('webSearch in auto mode falls back to ddg when searxng unreachable', async 
     reachableImpl: fakeProbe,
   });
   assert.equal(results[0].title, 'DG');
+});
+
+test('webSearch in auto mode falls back to ddg when searxng returns []', async () => {
+  // Real-world cause: SearXNG up but a backing engine (reddit/hackernews) timed out.
+  const fakeSearxng = mock.fn(async () => []);
+  const fakeDdg = mock.fn(async () => [{ title: 'DG', url: 'https://x', snippet: 's' }]);
+  const fakeProbe = mock.fn(async () => true);
+  const results = await webSearch('foo', 3, {
+    backend: 'auto',
+    searxngImpl: fakeSearxng,
+    ddgImpl: fakeDdg,
+    reachableImpl: fakeProbe,
+  });
+  assert.equal(fakeSearxng.mock.calls.length, 1);
+  assert.equal(fakeDdg.mock.calls.length, 1);
+  assert.equal(results[0].title, 'DG');
+});
+
+test('webSearch in auto mode keeps searxng results when non-empty', async () => {
+  const fakeSearxng = mock.fn(async () => [{ title: 'SX', url: 'https://x', snippet: 's' }]);
+  const fakeDdg = mock.fn(async () => { throw new Error('should not be called'); });
+  const fakeProbe = mock.fn(async () => true);
+  const results = await webSearch('foo', 3, {
+    backend: 'auto',
+    searxngImpl: fakeSearxng,
+    ddgImpl: fakeDdg,
+    reachableImpl: fakeProbe,
+  });
+  assert.equal(results[0].title, 'SX');
+  assert.equal(fakeDdg.mock.calls.length, 0);
 });
 
 test('webSearch passes cache and ttlMs through to underlying backend', async () => {

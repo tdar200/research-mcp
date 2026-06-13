@@ -1,4 +1,5 @@
 import { curlFetch } from '../http.js';
+import { truncateAtBoundary } from '../truncate.js';
 
 const REGISTRY_BASE = 'https://registry.npmjs.org';
 
@@ -66,11 +67,11 @@ export async function npmExtractor(url, opts = {}) {
   ];
 
   const md = lines.join('\n');
-  const truncated = md.length > maxChars;
+  const { content, truncated } = truncateAtBoundary(md, maxChars);
   return {
     url,
     title: `${data.name} (${latest})`,
-    content: truncated ? md.slice(0, maxChars) : md,
+    content,
     truncated,
     extractor: 'npm',
   };

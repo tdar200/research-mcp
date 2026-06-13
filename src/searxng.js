@@ -1,5 +1,5 @@
 import { curlFetch } from './http.js';
-import { cacheKeyFor } from './cacheKey.js';
+import { searchCacheKey, readSearchCache, SEARCH_CACHE_TOOL } from './searchCacheKey.js';
 
 const DEFAULT_BASE_URL = 'http://localhost:8888';
 
@@ -43,11 +43,13 @@ export async function searxngSearch(query, numResults = 5, opts = {}) {
     timeRange = 'all',
   } = opts;
 
+  // Unified search-results cache shared with DDG + search_and_read; keyed on
+  // (query, source, time_range) independent of numResults (see searchCacheKey.js).
   let cacheKey = null;
   if (cache && ttlMs) {
-    cacheKey = cacheKeyFor('web_search', [query, numResults, source, timeRange]);
-    const hit = cache.get({ cacheKey, ttlMs });
-    if (hit) return hit.result;
+    cacheKey = searchCacheKey({ query, source, timeRange });
+    const hit = readSearchCache({ cache, ttlMs, key: cacheKey, want: numResults });
+    if (hit) return hit;
   }
 
   const params = new URLSearchParams({ q: query, format: 'json' });
@@ -81,9 +83,9 @@ export async function searxngSearch(query, numResults = 5, opts = {}) {
     snippet: r.content || '',
   }));
 
-  if (cache && cacheKey) {
+  if (cache && cacheKey && results.length > 0) {
     cache.set({
-      tool: 'web_search',
+      tool: SEARCH_CACHE_TOOL,
       cacheKey,
       query,
       params: { num_results: numResults, source, time_range: timeRange },

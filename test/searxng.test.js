@@ -66,7 +66,11 @@ test('searxngSearch uses custom baseUrl', async () => {
 test('searxngSearch uses cache on hit', async () => {
   const fakeFetch = mock.fn(async () => { throw new Error('should not be called'); });
   const fakeCache = {
-    get: mock.fn(() => ({ result: [{ title: 'Cached', url: 'https://x', snippet: 's' }] })),
+    // Realistic cached entry includes params.num_results (authoritative reuse).
+    get: mock.fn(() => ({
+      result: [{ title: 'Cached', url: 'https://x', snippet: 's' }],
+      params: { num_results: 3, source: 'web', time_range: 'all' },
+    })),
     set: mock.fn(),
   };
   const results = await searxngSearch('foo', 3, { fetchImpl: fakeFetch, cache: fakeCache, ttlMs: 60_000 });
@@ -174,7 +178,8 @@ test('searxngSearch with source + timeRange combines both params', async () => {
 
 test('searxngSearch cache key differs for different source values', async () => {
   const fakeFetch = mock.fn(async () => ({
-    ok: true, status: 200, statusText: 'OK', text: async () => JSON.stringify({ results: [] }),
+    ok: true, status: 200, statusText: 'OK',
+    text: async () => JSON.stringify({ results: [{ title: 't', url: 'https://x', content: 's' }] }),
   }));
   const captured = [];
   const fakeCache = {
@@ -185,4 +190,20 @@ test('searxngSearch cache key differs for different source values', async () => 
   await searxngSearch('foo', 5, { fetchImpl: fakeFetch, cache: fakeCache, ttlMs: 60_000, source: 'reddit' });
   assert.equal(captured.length, 2);
   assert.notEqual(captured[0], captured[1], 'different source should produce different cache key');
+});
+
+test('searxngSearch does not cache empty results', async () => {
+  // Empty result usually means a backing engine timed out; caching it
+  // would lock in a bad answer for the TTL window.
+  const fakeFetch = mock.fn(async () => ({
+    ok: true, status: 200, statusText: 'OK',
+    text: async () => JSON.stringify({ results: [], unresponsive_engines: [['reddit', 'timeout']] }),
+  }));
+  const setSpy = mock.fn();
+  const fakeCache = { get: mock.fn(() => null), set: setSpy };
+  const results = await searxngSearch('foo', 5, {
+    fetchImpl: fakeFetch, cache: fakeCache, ttlMs: 60_000, source: 'reddit',
+  });
+  assert.equal(results.length, 0);
+  assert.equal(setSpy.mock.calls.length, 0, 'empty result must not be cached');
 });

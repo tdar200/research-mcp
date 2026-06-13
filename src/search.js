@@ -1,6 +1,6 @@
 import { load } from 'cheerio';
 import { curlFetch } from './http.js';
-import { cacheKeyFor } from './cacheKey.js';
+import { searchCacheKey, readSearchCache, SEARCH_CACHE_TOOL } from './searchCacheKey.js';
 import { searxngSearch, isSearxngReachable } from './searxng.js';
 
 /**
@@ -87,11 +87,14 @@ function ddgTimeParam(timeRange) {
 export async function duckDuckGoSearch(query, numResults = 5, opts = {}) {
   const { cache, ttlMs, fetchImpl = curlFetch, source = 'web', timeRange = 'all' } = opts;
 
+  // Unified search-results cache (shared with searxng + search_and_read):
+  // keyed on (query, source, time_range) only — independent of numResults — so a
+  // superset fetch satisfies any smaller-N request. See searchCacheKey.js.
   let cacheKey = null;
   if (cache && ttlMs) {
-    cacheKey = cacheKeyFor('web_search', [query, numResults, source, timeRange]);
-    const hit = cache.get({ cacheKey, ttlMs });
-    if (hit) return hit.result;
+    cacheKey = searchCacheKey({ query, source, timeRange });
+    const hit = readSearchCache({ cache, ttlMs, key: cacheKey, want: numResults });
+    if (hit) return hit;
   }
 
   const finalQuery = ddgSourcePrefix(source) + query;
@@ -116,9 +119,11 @@ export async function duckDuckGoSearch(query, numResults = 5, opts = {}) {
   const html = await res.text();
   const results = parseDuckDuckGoHtml(html, numResults);
 
-  if (cache && cacheKey) {
+  // Don't cache empty results — a transient parser/HTML hiccup shouldn't be
+  // locked in for the TTL window (mirrors the searxng empty-guard).
+  if (cache && cacheKey && results.length > 0) {
     cache.set({
-      tool: 'web_search',
+      tool: SEARCH_CACHE_TOOL,
       cacheKey,
       query,
       params: { num_results: numResults, source, time_range: timeRange },
@@ -167,7 +172,12 @@ export async function webSearch(query, numResults = 5, opts = {}) {
   }
   const reachable = await reachableImpl(searxngUrl || 'http://localhost:8888');
   if (reachable) {
-    return await searxngImpl(query, numResults, downstreamOpts);
+    const sxResults = await searxngImpl(query, numResults, downstreamOpts);
+    if (sxResults.length > 0) return sxResults;
+    // Empty SearXNG response often means a backing engine timed out
+    // (reddit/hackernews are routinely flaky). Fall back to DDG so the
+    // source/time_range pathway still returns data.
+    return await ddgImpl(query, numResults, downstreamOpts);
   }
   return await ddgImpl(query, numResults, downstreamOpts);
 }

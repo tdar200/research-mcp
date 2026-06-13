@@ -179,6 +179,34 @@ curl http://localhost:11235/health    # verify
 6. Mozilla Readability fallback
 ```
 
+## v0.7.0 — reliability + security hardening
+
+Cross-cutting hardening across search, fetch, and cache. No new public tools; output shapes gain additive fields only.
+
+### SSRF protection (`src/ssrf.js`, `src/http.js`)
+
+`fetch_url`/`smartFetch` validate the target URL up front (production path) and on every redirect hop against a `net.BlockList` of loopback / private (RFC-1918) / CGNAT / link-local (incl. `169.254.169.254` cloud metadata) / unique-local / reserved ranges, for both IPv4 and IPv6 (incl. bracketed and IPv4-mapped forms). Non-`http(s)` schemes are rejected. To defeat DNS rebinding, the validated IP is pinned into curl via `--resolve` so curl connects to the checked address instead of re-resolving the hostname; `guardedCurlFetch` disables curl's own redirect following and re-validates + re-pins each hop. Internal SearXNG/Crawl4AI clients call `curlFetch` directly against localhost and are unaffected. Escape hatch: `RESEARCH_MCP_ALLOW_PRIVATE=1`. Test mode (any injected leaf impl) skips the top-level guard to keep unit tests off the network.
+
+### Untrusted-content fencing (`src/untrusted.js`)
+
+At the server output layer, the `content` field of `fetch_url`/`search_and_read`/`get_research` is fenced with `[BEGIN/END UNTRUSTED WEB CONTENT]` markers plus a one-line caution (indirect prompt-injection mitigation, per OWASP guidance). Applied at response time only — the cache always stores clean content; idempotent so a cache hit and a live call produce identical output. Disable: `DISABLE_UNTRUSTED_WRAP=1`.
+
+### Content cleaning + URL identity (`src/clean.js`, `src/urlIdentity.js`)
+
+`smartFetch` runs a conservative, line-based cleaner over extracted markdown (drops "Promoted" ad cards, "Skip to main content", login/cookie/nav chrome) — only short, exactly-matching lines are eligible, so prose is never eaten; if cleaning would empty the content the original is kept. A landed-vs-requested URL mismatch (e.g. Reddit resolving a base36 id to a different post) surfaces as a non-fatal `urlMismatch` note. Disable cleaning: `DISABLE_CONTENT_CLEAN=1`.
+
+### Observability + fetch robustness
+
+Every successful fetch carries `strategy` (winning stage: extractor name / `jsonld` / `jina` / `crawl4ai` / `readability` / `cache`) and `elapsed_ms`. `search_and_read` gains a per-URL deadline (`RESEARCH_MCP_FETCH_TIMEOUT_MS`, default 10s) and bounded concurrency (`RESEARCH_MCP_FETCH_CONCURRENCY`, default 4) so a slow page can't stall the batch; Jina retries once with jittered backoff on `429`/`503`; truncation cuts at sentence/word boundaries.
+
+### Search reliability + unified cache (`src/searchCacheKey.js`)
+
+Zero-result searches return an explanatory `note` instead of a silent `[]` (and an empty result is never cached). The search-results cache is unified across `web_search` and `search_and_read`, keyed on `(query, source, time_range)` independent of `num_results` (a superset fetch satisfies any smaller-N request) — eliminating the double-spend when an agent searches then reads the same query.
+
+### Cache policy (`src/ttlPolicy.js`, eviction in `src/cache.js`)
+
+`RESEARCH_MCP_CACHE_TTL_HOURS` is now a **base** TTL multiplied per query class: volatile (news / `time_range=day|week`) ÷24, generic ×7, doc/code hosts + PDFs ×30. The cache evicts by age (`RESEARCH_MCP_CACHE_MAX_AGE_DAYS`, floored to the longest class TTL) and by row cap (`RESEARCH_MCP_CACHE_MAX_ROWS`), opportunistically on writes and at startup, so the DB no longer grows unbounded.
+
 ## Non-goals (deferred to Tier 2+)
 
 - Self-hosted search (SearXNG) — DuckDuckGo HTML scrape is enough for MVP.

@@ -1,6 +1,7 @@
 import { Readability } from '@mozilla/readability';
 import { JSDOM } from 'jsdom';
 import { curlFetch } from './http.js';
+import { truncateAtBoundary } from './truncate.js';
 
 /**
  * Fetch a URL and extract main content using Mozilla Readability + jsdom.
@@ -48,12 +49,15 @@ export async function readabilityFetch(url, opts = {}) {
     }
 
     const raw = article.textContent.trim();
-    const truncated = raw.length > maxChars;
+    const { content, truncated } = truncateAtBoundary(raw, maxChars);
     return {
       url,
       title: article.title || null,
-      content: truncated ? raw.slice(0, maxChars) : raw,
+      content,
       truncated,
+      // readabilityFetch hits the real target URL directly (not a proxy), so
+      // curl's effective URL is a reliable post-redirect identity signal.
+      _finalUrl: res.finalUrl ?? null,
     };
   } catch (err) {
     return {

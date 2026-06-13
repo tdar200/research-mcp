@@ -10,76 +10,208 @@ import { spawn } from 'node:child_process';
  *   on the very same IPs. Rather than chase TLS fingerprinting or kernel TCP
  *   tuning, we shell out. Curl is universally available and stable.
  *
- * Returns: { ok, status, statusText, text() } — fetch-Response-ish.
+ * Returns: { ok, status, statusText, finalUrl, text() } — fetch-Response-ish.
+ * `finalUrl` is curl's effective URL after redirects (curlFetch) or the URL we
+ * actually fetched (guardedCurlFetch) — used by the URL-identity check.
  */
-export function curlFetch(url, opts = {}) {
+
+const DEFAULT_TIMEOUT_MS = 15000;
+const DEFAULT_MAX_BYTES = 5 * 1024 * 1024; // 5 MB safety cap
+
+// curlFetch follows redirects itself, so url_effective is the final landed URL.
+const CURL_WRITE_OUT = '\nHTTP_CODE:%{http_code}\nFINAL_URL:%{url_effective}\n';
+// guardedCurlFetch does NOT follow redirects; redirect_url is the next hop.
+const GUARDED_WRITE_OUT = '\nHTTP_CODE:%{http_code}\nREDIRECT_URL:%{redirect_url}\n';
+
+/**
+ * Parse curlFetch stdout (HTTP_CODE + FINAL_URL trailer) into structured parts.
+ * Exported so the parse logic is unit-testable without spawning curl.
+ * @param {string} raw - full curl stdout (body + trailer)
+ * @param {string} requestedUrl - fallback when url_effective is empty
+ * @returns {{status:number, finalUrl:string, bodyText:string}|null}
+ */
+export function parseCurlOutput(raw, requestedUrl) {
+  let m = raw.match(/\nHTTP_CODE:(\d+)\nFINAL_URL:([^\n]*)\n?$/);
+  if (m) {
+    return {
+      status: Number(m[1]),
+      finalUrl: (m[2] || '').trim() || requestedUrl,
+      bodyText: raw.slice(0, m.index),
+    };
+  }
+  // Fallback: HTTP_CODE-only trailer (defensive — older/odd curl).
+  m = raw.match(/\nHTTP_CODE:(\d+)\n?$/);
+  if (m) {
+    return { status: Number(m[1]), finalUrl: requestedUrl, bodyText: raw.slice(0, m.index) };
+  }
+  return null;
+}
+
+/** Parse guardedCurlFetch stdout (HTTP_CODE + REDIRECT_URL trailer). */
+function parseGuardedOutput(raw) {
+  let m = raw.match(/\nHTTP_CODE:(\d+)\nREDIRECT_URL:([^\n]*)\n?$/);
+  if (m) {
+    return { status: Number(m[1]), redirectUrl: (m[2] || '').trim(), bodyText: raw.slice(0, m.index) };
+  }
+  m = raw.match(/\nHTTP_CODE:(\d+)\n?$/);
+  if (m) {
+    return { status: Number(m[1]), redirectUrl: '', bodyText: raw.slice(0, m.index) };
+  }
+  return null;
+}
+
+/**
+ * Spawn curl with the given args (target url must already be the last arg).
+ * Resolves with { code, stdout(Buffer), stderr } — never rejects on a non-zero
+ * exit (callers decide). Rejects only on spawn error.
+ */
+function spawnCurl(args, body) {
+  return new Promise((resolve, reject) => {
+    const child = spawn('curl', args, { stdio: ['pipe', 'pipe', 'pipe'] });
+    let stdout = Buffer.alloc(0);
+    let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout = Buffer.concat([stdout, chunk]); });
+    child.stderr.on('data', (chunk) => { stderr += chunk.toString('utf8'); });
+    child.on('error', (err) => reject(err));
+    child.on('close', (code) => resolve({ code, stdout, stderr }));
+    if (body != null) { child.stdin.write(body); child.stdin.end(); }
+    else child.stdin.end();
+  });
+}
+
+/** Common curl args shared by both fetchers (no redirect flags, no url). */
+function commonArgs({ method, headers, body, timeoutMs, maxBytes, writeOut }) {
+  const args = [
+    '--silent',
+    '--show-error',
+    '--max-time', String(Math.ceil(timeoutMs / 1000)),
+    '--max-filesize', String(maxBytes),
+    '--http1.1', // avoid HTTP/2 SETTINGS oddities
+    '--write-out', writeOut,
+    '-X', method,
+  ];
+  for (const [k, v] of Object.entries(headers)) args.push('-H', `${k}: ${v}`);
+  if (body != null) args.push('--data-binary', '@-');
+  return args;
+}
+
+function makeResponse(status, finalUrl, bodyText) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    statusText: statusTextFor(status),
+    finalUrl,
+    text: async () => bodyText,
+  };
+}
+
+/**
+ * Fetch a URL via curl, following redirects (--location). Unchanged external
+ * behavior except the additive `finalUrl` field. Used by ALL internal callers
+ * (SearXNG/Crawl4AI/extractors) — must keep following redirects transparently.
+ */
+export async function curlFetch(url, opts = {}) {
   const {
     method = 'GET',
     headers = {},
     body = null,
-    timeoutMs = 15000,
-    maxBytes = 5 * 1024 * 1024, // 5 MB safety cap
+    timeoutMs = DEFAULT_TIMEOUT_MS,
+    maxBytes = DEFAULT_MAX_BYTES,
+    _spawnImpl = spawnCurl, // injectable for tests
   } = opts;
 
-  return new Promise((resolve, reject) => {
+  const args = [
+    ...commonArgs({ method, headers, body, timeoutMs, maxBytes, writeOut: CURL_WRITE_OUT }),
+    '--location',
+    '--max-redirs', '5',
+    url,
+  ];
+
+  const { code, stdout, stderr } = await _spawnImpl(args, body);
+  if (code !== 0) {
+    throw new Error(`curl exited ${code}: ${stderr.trim() || 'unknown error'}`);
+  }
+  const raw = stdout.toString('utf8');
+  const parsed = parseCurlOutput(raw, url);
+  if (!parsed) {
+    throw new Error(`could not parse HTTP code from curl output`);
+  }
+  return makeResponse(parsed.status, parsed.finalUrl, parsed.bodyText);
+}
+
+/**
+ * SSRF-aware fetch: does NOT let curl follow redirects. Manually walks each 3xx
+ * hop, re-running `opts.ssrfGuard(nextUrl)` before continuing, so a public URL
+ * cannot redirect into a private/loopback range. Returns the first non-3xx
+ * response. `finalUrl` on the returned response is the URL actually fetched.
+ *
+ * @param {object} [opts]
+ * @param {function} [opts.ssrfGuard] - async (url) => pin|void; throws to abort a hop,
+ *        returns a {host,port,ip} pin to re-pin curl for the next hop
+ * @param {object} [opts.ssrfPin] - {host,port,ip} to pin the first hop via curl --resolve
+ * @param {number} [opts.maxRedirs=5]
+ * @param {function} [opts._spawnImpl=spawnCurl] - inject for tests
+ */
+export async function guardedCurlFetch(url, opts = {}) {
+  const {
+    method = 'GET',
+    headers = {},
+    body = null,
+    timeoutMs = DEFAULT_TIMEOUT_MS,
+    maxBytes = DEFAULT_MAX_BYTES,
+    ssrfGuard,
+    ssrfPin,
+    maxRedirs = 5,
+    _spawnImpl = spawnCurl,
+  } = opts;
+
+  let currentUrl = url;
+  let currentMethod = method;
+  let currentBody = body;
+  let pin = ssrfPin; // {host,port,ip} validated address to pin curl to (rebinding defense)
+
+  for (let hop = 0; ; hop++) {
     const args = [
-      '--silent',
-      '--show-error',
-      '--location',                    // follow redirects
-      '--max-redirs', '5',
-      '--max-time', String(Math.ceil(timeoutMs / 1000)),
-      '--max-filesize', String(maxBytes),
-      '--http1.1',                     // avoid HTTP/2 SETTINGS oddities
-      '--write-out', '\nHTTP_CODE:%{http_code}\n',
-      '-X', method,
+      ...commonArgs({
+        method: currentMethod, headers, body: currentBody,
+        timeoutMs, maxBytes, writeOut: GUARDED_WRITE_OUT,
+      }),
+      // Pin curl to the validated IP so it cannot independently re-resolve the
+      // hostname to a private address between our check and curl's connect.
+      ...(pin ? ['--resolve', `${pin.host}:${pin.port}:${pin.ip}`] : []),
+      currentUrl,
     ];
 
-    for (const [k, v] of Object.entries(headers)) {
-      args.push('-H', `${k}: ${v}`);
+    const { code, stdout, stderr } = await _spawnImpl(args, currentBody);
+    if (code !== 0) {
+      throw new Error(`curl exited ${code}: ${stderr.trim() || 'unknown error'}`);
     }
-    if (body != null) {
-      args.push('--data-binary', '@-');
+    const raw = stdout.toString('utf8');
+    const parsed = parseGuardedOutput(raw);
+    if (!parsed) {
+      throw new Error(`could not parse HTTP code from curl output`);
     }
 
-    args.push(url);
-
-    const child = spawn('curl', args, { stdio: ['pipe', 'pipe', 'pipe'] });
-
-    let stdout = Buffer.alloc(0);
-    let stderr = '';
-
-    child.stdout.on('data', (chunk) => { stdout = Buffer.concat([stdout, chunk]); });
-    child.stderr.on('data', (chunk) => { stderr += chunk.toString('utf8'); });
-
-    child.on('error', (err) => reject(err));
-
-    child.on('close', (code) => {
-      if (code !== 0) {
-        return reject(new Error(`curl exited ${code}: ${stderr.trim() || 'unknown error'}`));
-      }
-      const raw = stdout.toString('utf8');
-      const m = raw.match(/\nHTTP_CODE:(\d+)\n?$/);
-      if (!m) {
-        return reject(new Error(`could not parse HTTP code from curl output`));
-      }
-      const status = Number(m[1]);
-      const bodyText = raw.slice(0, m.index);
-
-      resolve({
-        ok: status >= 200 && status < 300,
-        status,
-        statusText: statusTextFor(status),
-        text: async () => bodyText,
-      });
-    });
-
-    if (body != null) {
-      child.stdin.write(body);
-      child.stdin.end();
-    } else {
-      child.stdin.end();
+    const isRedirect = parsed.status >= 300 && parsed.status < 400 && parsed.redirectUrl;
+    if (!isRedirect) {
+      return makeResponse(parsed.status, currentUrl, parsed.bodyText);
     }
-  });
+    if (hop >= maxRedirs) {
+      throw new Error(`too many redirects (>${maxRedirs}) starting at ${url}`);
+    }
+
+    const nextUrl = new URL(parsed.redirectUrl, currentUrl).href;
+    // Re-validate each hop; throws SsrfError to abort. Returns the next hop's
+    // validated pin so we connect curl to the checked IP (rebinding defense).
+    pin = ssrfGuard ? await ssrfGuard(nextUrl) : null;
+
+    // HTTP method semantics: 307/308 preserve method+body; 301/302/303 -> GET.
+    if (parsed.status !== 307 && parsed.status !== 308) {
+      currentMethod = 'GET';
+      currentBody = null;
+    }
+    currentUrl = nextUrl;
+  }
 }
 
 function statusTextFor(code) {

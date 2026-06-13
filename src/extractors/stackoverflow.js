@@ -1,4 +1,5 @@
 import { curlFetch } from '../http.js';
+import { truncateAtBoundary } from '../truncate.js';
 
 const API_BASE = 'https://api.stackexchange.com/2.3';
 
@@ -69,11 +70,11 @@ export async function stackoverflowExtractor(url, opts = {}) {
   });
 
   const md = lines.join('\n');
-  const truncated = md.length > maxChars;
+  const { content, truncated } = truncateAtBoundary(md, maxChars);
   return {
     url,
     title: q.title,
-    content: truncated ? md.slice(0, maxChars) : md,
+    content,
     truncated,
     extractor: 'stackoverflow',
   };

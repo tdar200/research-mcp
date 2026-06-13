@@ -23,13 +23,24 @@ CREATE INDEX IF NOT EXISTS idx_searches_tool_time  ON searches(tool, created_at 
  * just stores blobs keyed by cache_key with timestamps.
  */
 export class Cache {
-  constructor({ dbPath, now = () => Date.now() } = {}) {
+  constructor({
+    dbPath,
+    now = () => Date.now(),
+    maxRows = 5000,
+    maxAgeMs = 30 * 24 * 3600 * 1000,
+    pruneEveryWrites = 200,
+    pruneOnStart = true,
+  } = {}) {
     if (!dbPath) throw new Error('Cache requires dbPath');
     mkdirSync(dirname(dbPath), { recursive: true });
     this.db = new Database(dbPath);
     this.db.pragma('journal_mode = WAL');
     this.db.exec(SCHEMA);
     this.now = now;
+    this.maxRows = maxRows;
+    this.maxAgeMs = maxAgeMs;
+    this.pruneEveryWrites = pruneEveryWrites;
+    this._writeCount = 0;
 
     this._insert = this.db.prepare(`
       INSERT INTO searches (tool, cache_key, query, params_json, result_json, created_at)
@@ -56,6 +67,18 @@ export class Cache {
       ORDER BY created_at DESC
       LIMIT ?
     `);
+    this._pruneByAge = this.db.prepare(`DELETE FROM searches WHERE created_at < ?`);
+    this._countRows = this.db.prepare(`SELECT COUNT(*) AS n FROM searches`);
+    // LIMIT -1 OFFSET ? = delete every row past the newest `maxRows`.
+    this._pruneOverCap = this.db.prepare(`
+      DELETE FROM searches WHERE id IN (
+        SELECT id FROM searches ORDER BY created_at DESC LIMIT -1 OFFSET ?
+      )
+    `);
+
+    if (pruneOnStart) {
+      try { this.prune(); } catch { /* a locked/odd WAL on boot must not crash startup */ }
+    }
   }
 
   set({ tool, cacheKey, query, params, result }) {
@@ -67,6 +90,26 @@ export class Cache {
       result_json: JSON.stringify(result),
       created_at: this.now(),
     });
+    // Opportunistic, amortized eviction — a COUNT(*) every K writes is cheap.
+    if (this.pruneEveryWrites > 0 && ++this._writeCount % this.pruneEveryWrites === 0) {
+      try { this.prune(); } catch { /* eviction is best-effort */ }
+    }
+  }
+
+  /**
+   * Evict rows older than maxAgeMs and trim the table to the newest maxRows.
+   * Age-based eviction is independent of read-time TTL. Returns counts for
+   * observability. Safe to call repeatedly; driven by the injectable now() clock.
+   */
+  prune() {
+    const cutoff = this.now() - this.maxAgeMs;
+    const byAge = this._pruneByAge.run(cutoff).changes;
+    let byCap = 0;
+    if (this.maxRows > 0) {
+      const { n } = this._countRows.get();
+      if (n > this.maxRows) byCap = this._pruneOverCap.run(this.maxRows).changes;
+    }
+    return { byAge, byCap, remaining: this._countRows.get().n };
   }
 
   get({ cacheKey, ttlMs }) {
