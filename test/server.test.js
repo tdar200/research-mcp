@@ -37,7 +37,7 @@ async function rpc(messages, env = {}) {
   });
 }
 
-test('server lists 5 tools including list_research and get_research', async () => {
+test('server lists 6 tools including ebay_search, list_research and get_research', async () => {
   const responses = await rpc([
     { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 't', version: '0' } } },
     { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} },
@@ -45,7 +45,7 @@ test('server lists 5 tools including list_research and get_research', async () =
   const listResp = responses.find(r => r.id === 2);
   assert.ok(listResp, 'expected tools/list response');
   const names = listResp.result.tools.map(t => t.name).sort();
-  assert.deepEqual(names, ['fetch_url', 'get_research', 'list_research', 'search_and_read', 'web_search']);
+  assert.deepEqual(names, ['ebay_search', 'fetch_url', 'get_research', 'list_research', 'search_and_read', 'web_search']);
 
   const webSearchTool = listResp.result.tools.find(t => t.name === 'web_search');
   assert.ok(webSearchTool.inputSchema.properties.source, 'web_search schema should include source');

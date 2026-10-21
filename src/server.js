@@ -23,6 +23,7 @@ import { Cache } from './cache.js';
 import { resolveTtlMs, TTL_MULTIPLIERS } from './ttlPolicy.js';
 import { emptySearchNote } from './searchCacheKey.js';
 import { wrapFetchResult, wrapSearchResult } from './untrusted.js';
+import { createEbayClient } from './ebay.js';
 
 const DB_PATH = process.env.RESEARCH_MCP_DB_PATH || join(homedir(), '.research-mcp', 'cache.db');
 const TTL_HOURS = Number(process.env.RESEARCH_MCP_CACHE_TTL_HOURS ?? 24);
@@ -34,6 +35,8 @@ const SEARXNG_URL = process.env.SEARXNG_URL || 'http://localhost:8888';
 const DISABLE_EXTRACTORS = process.env.DISABLE_EXTRACTORS === '1';
 const CRAWL4AI_URL = process.env.CRAWL4AI_URL || 'http://localhost:11235';
 const DISABLE_CRAWL4AI = process.env.DISABLE_CRAWL4AI === '1';
+const EBAY_CLIENT_ID = process.env.EBAY_CLIENT_ID || '';
+const EBAY_CLIENT_SECRET = process.env.EBAY_CLIENT_SECRET || '';
 
 // v0.7.0 knobs. numEnv rejects non-numeric values (which would otherwise NaN
 // their way into silently disabling eviction).
@@ -90,6 +93,16 @@ const ListResearchArgs = z.object({
 
 const GetResearchArgs = z.object({
   id: z.number().int().min(1),
+});
+
+const EbaySearchArgs = z.object({
+  query: z.string(),
+  limit: z.number().int().min(1).max(50).optional().default(10),
+  condition: z.enum(['all', 'new', 'used', 'refurbished']).optional().default('all'),
+  price_min: z.number().min(0).optional(),
+  price_max: z.number().min(0).optional(),
+  sort: z.enum(['best_match', 'price', '-price', 'newlyListed']).optional().default('best_match'),
+  marketplace: z.string().regex(/^EBAY_[A-Z_]+$/).optional().default('EBAY_GB'),
 });
 
 const TOOLS = [
@@ -167,6 +180,27 @@ const TOOLS = [
     },
   },
   {
+    name: 'ebay_search',
+    description:
+      'Search live eBay listings via the official eBay Browse API (bypasses the anti-bot wall that blocks fetch_url on ebay.com). ' +
+      'Returns {query, marketplace, total, results: [{title, price, currency, condition, url, seller, feedbackPercent, feedbackScore, location, shipping}]}. ' +
+      'Defaults to EBAY_GB (UK). Requires EBAY_CLIENT_ID / EBAY_CLIENT_SECRET (free keys: developer.ebay.com); ' +
+      'without them, returns a setup-guidance error instead of results.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'What to search for, e.g. "ryzen 9 7950x pc 64gb"' },
+        limit: { type: 'integer', minimum: 1, maximum: 50, default: 10 },
+        condition: { type: 'string', enum: ['all', 'new', 'used', 'refurbished'], default: 'all' },
+        price_min: { type: 'number', minimum: 0, description: 'Min price in marketplace currency' },
+        price_max: { type: 'number', minimum: 0, description: 'Max price in marketplace currency' },
+        sort: { type: 'string', enum: ['best_match', 'price', '-price', 'newlyListed'], default: 'best_match', description: 'price = cheapest first, -price = dearest first' },
+        marketplace: { type: 'string', default: 'EBAY_GB', description: 'e.g. EBAY_GB, EBAY_US, EBAY_DE' },
+      },
+      required: ['query'],
+    },
+  },
+  {
     name: 'list_research',
     description:
       'List recent cached research queries (newest first). Use this BEFORE calling search_and_read ' +
@@ -199,6 +233,8 @@ const server = new Server(
   { name: 'research-mcp', version: '0.7.0' },
   { capabilities: { tools: {} } }
 );
+
+const ebayClient = createEbayClient({ clientId: EBAY_CLIENT_ID, clientSecret: EBAY_CLIENT_SECRET });
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
 
@@ -262,6 +298,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       });
       const wrapped = wrapSearchResult(result, { enabled: WRAP_UNTRUSTED });
       return { content: [{ type: 'text', text: JSON.stringify(wrapped, null, 2) }] };
+    }
+
+    if (name === 'ebay_search') {
+      const { query, limit, condition, price_min, price_max, sort, marketplace } = EbaySearchArgs.parse(args);
+      const result = await ebayClient.search(query, {
+        limit,
+        condition: condition === 'all' ? undefined : condition,
+        priceMin: price_min,
+        priceMax: price_max,
+        sort: sort === 'best_match' ? undefined : sort,
+        marketplace,
+      });
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     }
 
     if (name === 'list_research') {
